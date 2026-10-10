@@ -1,0 +1,6 @@
+{
+  "name": "PhoneMic",
+  "description": "Stream high-quality phone microphone audio to your PC over Wi-Fi or USB tethering with low latency.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

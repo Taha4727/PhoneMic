@@ -1,0 +1,59 @@
+<resources>
+    <string name="app_name">PhoneMic</string>
+    <string name="app_tagline">Studio-quality wireless &amp; USB microphone for PC</string>
+
+    <string name="default_ip">192.168.1.100</string>
+    <string name="default_port">5001</string>
+
+    <string name="label_windows_ip">Receiver IP Address</string>
+    <string name="label_port">Port Number</string>
+    <string name="label_connection">Connection Mode</string>
+    <string name="label_transport">Transport Protocol</string>
+    <string name="label_microphone">Microphone Profile</string>
+
+    <string name="btn_start">Start Streaming</string>
+    <string name="btn_stop">Stop</string>
+    <string name="btn_pause">Mute / Pause</string>
+    <string name="btn_resume">Resume Audio</string>
+    <string name="btn_find_pc">Scan / Auto-Detect PC</string>
+    <string name="btn_tether_settings">Open USB Tethering Settings</string>
+    <string name="btn_help">Setup Guide</string>
+
+    <string name="status_ready">Ready to connect</string>
+    <string name="status_starting">Starting stream service…</string>
+    <string name="status_paused">Muted / Paused</string>
+    <string name="status_stopped">Streaming stopped</string>
+    <string name="status_finding_pc">Scanning local network for receiver…</string>
+    <string name="status_found_pc">Found receiver at %1$s</string>
+    <string name="status_no_pc">No PC receiver found. Ensure python receiver is running.</string>
+    <string name="status_permission_needed">Microphone permission required</string>
+    <string name="status_service_disconnected">Stream service disconnected</string>
+    <string name="status_enter_ip">Please enter target IP address</string>
+    <string name="status_invalid_ip">Please enter a valid IPv4 address (e.g. 192.168.1.50)</string>
+    <string name="status_enter_port">Please enter port</string>
+    <string name="status_invalid_port">Port must be between 1 and 65535</string>
+    <string name="error_invalid_ip">Invalid IP address</string>
+
+    <string name="active_session">Streaming to %1$s via %2$s (%3$s)</string>
+    <string name="elapsed_time">Duration: %1$s</string>
+
+    <string name="hint_mic_natural">Voice Recognition (Echo cancellation &amp; noise filter active)</string>
+    <string name="hint_mic_loud">Standard Raw Mic (Unprocessed input)</string>
+    <string name="hint_mic_camcorder">Camcorder Mic (Wide dynamic range for ambient / room)</string>
+
+    <string-array name="connection_options">
+        <item>Wi-Fi</item>
+        <item>USB</item>
+    </string-array>
+
+    <string-array name="transport_options">
+        <item>UDP</item>
+        <item>TCP</item>
+    </string-array>
+
+    <string-array name="mic_options">
+        <item>Voice Recognition</item>
+        <item>Standard Mic</item>
+        <item>Camcorder</item>
+    </string-array>
+</resources>
