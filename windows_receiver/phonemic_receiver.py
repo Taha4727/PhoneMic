@@ -28,6 +28,8 @@ import math
 import wave
 import shutil
 import re
+import webbrowser
+import platform
 from datetime import datetime
 
 try:
@@ -69,8 +71,16 @@ CMD_PAUSE = b"PMP1"   # Receiver requests Android app to pause mic capture
 CMD_RESUME = b"PMR1"  # Receiver requests Android app to resume mic capture
 
 TARGET_DEVICE_NAME = "CABLE Input"
+VB_CABLE_PAGE = "https://vb-audio.com/Cable/"
+VB_CABLE_DIRECT_ZIP = "https://download.vb-audio.com/Download_VIP/VBCABLE_Driver_Pack43.zip"
 
 DEFAULT_GAIN = 1.0
+
+def get_app_dir():
+    """Returns the directory of the script or compiled PyInstaller executable."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 NOISE_GATE_THRESHOLD_DB = -55.0
 LIMITER_CEILING = 0.98
 
@@ -235,6 +245,101 @@ def find_audio_devices():
     return cable_device, default_output, all_outputs
 
 
+def run_preflight_check(skip_prompt=False):
+    """
+    Validates audio output targets, checks for VB-Audio Virtual Cable,
+    and prompts user with direct download options if VB-CABLE is missing.
+    """
+    cable_dev, default_out, all_outputs = find_audio_devices()
+    if cable_dev:
+        return cable_dev, default_out, True
+
+    if not skip_prompt:
+        cols, _ = shutil.get_terminal_size(fallback=(80, 24))
+        w = min(max(cols - 1, 60), 78)
+        print(f"\n{Colors.CYAN}{'═' * w}{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.YELLOW} [!] Audio Output Notice: VB-Audio Virtual Cable not detected{Colors.RESET}")
+        print(f"{Colors.CYAN}{'═' * w}{Colors.RESET}")
+        print(f" PhoneMic will route audio to your default playback device:")
+        if default_out:
+            print(f"  -> {Colors.GREEN}{default_out[1].get('name', 'Default Speakers')}{Colors.RESET}")
+        print(f"\n To use PhoneMic as a microphone in {Colors.BOLD}Discord, OBS, Zoom, or games{Colors.RESET},")
+        print(f" install the free VB-CABLE driver (no PC reboot required):")
+        print(f"  • Setup Website: {Colors.CYAN}{VB_CABLE_PAGE}{Colors.RESET}")
+        print(f"  • Direct Zip:    {Colors.CYAN}{VB_CABLE_DIRECT_ZIP}{Colors.RESET}")
+        print(f"{Colors.CYAN}{'─' * w}{Colors.RESET}")
+
+        try:
+            choice = input(f"{Colors.YELLOW} Open VB-CABLE download page in browser? [y/N] (or press Enter to continue): {Colors.RESET}").strip().lower()
+            if choice in ('y', 'yes', '1'):
+                webbrowser.open(VB_CABLE_PAGE)
+                print(f" {Colors.GREEN}[✓] Opened download page in your default browser.{Colors.RESET}\n")
+                time.sleep(1.0)
+        except (KeyboardInterrupt, EOFError):
+            pass
+
+    return cable_dev, default_out, False
+
+
+def run_diagnostics_suite():
+    """Performs a comprehensive dependency, network, and audio diagnostic check."""
+    init_windows_console()
+    print(f"{Colors.CYAN}{'=' * 75}{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.CYAN}       PhoneMic Windows Receiver - System & Audio Diagnostics{Colors.RESET}")
+    print(f"{Colors.CYAN}{'=' * 75}{Colors.RESET}\n")
+
+    # 1. Runtime Environment
+    print("[*] Runtime Environment:")
+    if getattr(sys, 'frozen', False):
+        print(f"    {Colors.GREEN}[✓] Running as standalone executable ({sys.executable}){Colors.RESET}")
+    else:
+        print(f"    {Colors.GREEN}[✓] Python {sys.version.split()[0]} ({platform.architecture()[0]}){Colors.RESET}")
+
+    # 2. Audio Engine Libraries
+    print("\n[*] Audio Engine (PortAudio / SoundDevice / NumPy):")
+    if sd is not None:
+        try:
+            ver = sd.__version__
+            print(f"    {Colors.GREEN}[✓] SoundDevice {ver} active{Colors.RESET}")
+        except Exception:
+            print(f"    {Colors.GREEN}[✓] SoundDevice active{Colors.RESET}")
+    else:
+        print(f"    {Colors.RED}[✗] SoundDevice library missing! Run: pip install sounddevice{Colors.RESET}")
+
+    if np is not None:
+        print(f"    {Colors.GREEN}[✓] NumPy {np.__version__} active{Colors.RESET}")
+    else:
+        print(f"    {Colors.RED}[✗] NumPy library missing! Run: pip install numpy{Colors.RESET}")
+
+    # 3. Audio Devices & VB-CABLE
+    print("\n[*] Audio Output Endpoints:")
+    cable_dev, default_out, all_outputs = find_audio_devices()
+    for idx, dev in all_outputs:
+        name = dev.get('name', 'Unknown')
+        is_cable = TARGET_DEVICE_NAME.lower() in name.lower()
+        is_default = default_out and default_out[0] == idx
+        tag = ""
+        if is_cable:
+            tag += f" {Colors.GREEN}[TARGET: VB-CABLE]{Colors.RESET}"
+        if is_default:
+            tag += f" {Colors.CYAN}[DEFAULT OUTPUT]{Colors.RESET}"
+        print(f"    [{idx:2d}] {name}{tag}")
+
+    if cable_dev:
+        print(f"\n    {Colors.GREEN}[✓] VB-Audio Virtual Cable is installed and ready for Discord/OBS!{Colors.RESET}")
+    else:
+        print(f"\n    {Colors.YELLOW}[!] VB-Audio Virtual Cable not detected.{Colors.RESET}")
+        print(f"        Download free from: {VB_CABLE_PAGE}")
+
+    # 4. Network Interfaces
+    print("\n[*] Network Interfaces & Local IP Addresses:")
+    ips = get_local_ips()
+    for ip in ips:
+        print(f"    -> {Colors.BOLD}{Colors.GREEN}{ip}{Colors.RESET} (Port {DEFAULT_PORT})")
+
+    print(f"\n{Colors.CYAN}{'=' * 75}{Colors.RESET}\n")
+
+
 # ==============================================================================
 # AUDIO DSP PIPELINE
 # ==============================================================================
@@ -338,6 +443,7 @@ class PhoneMicReceiver:
         # Streams
         self.audio_stream = None
         self.monitor_stream = None
+        self.cable_detected = False
 
         # Sockets
         self.udp_socket = None
@@ -627,7 +733,8 @@ class PhoneMicReceiver:
         self.recording = not self.recording
         if self.recording:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.wav_filename = f"PhoneMic_{timestamp}.wav"
+            filename = f"PhoneMic_{timestamp}.wav"
+            self.wav_filename = os.path.join(get_app_dir(), filename)
             self.record_start_time = time.time()
             self.record_bytes_written = 0
             try:
@@ -635,12 +742,12 @@ class PhoneMicReceiver:
                 self.wav_file.setnchannels(OUTPUT_CHANNELS)
                 self.wav_file.setsampwidth(SAMPLE_WIDTH)
                 self.wav_file.setframerate(AUDIO_RATE)
-                return True, self.wav_filename
+                return True, filename
             except Exception as e:
                 self.recording = False
                 return False, f"Cannot open WAV: {e}"
         else:
-            filename = self.wav_filename
+            filename = os.path.basename(self.wav_filename)
             if self.wav_file:
                 try:
                     self.wav_file.close()
@@ -789,7 +896,10 @@ def render_full_screen(receiver, target_dev_name, notification=""):
     lines.append(f"{Colors.CYAN}{'─' * min(usable_width, 79)}{Colors.RESET}")
 
     # Hotkey instructions
-    lines.append(f"Controls:    [P] Mute/Live   [R] Record WAV   [M] Monitor   [+] / [-] Gain   [Q] Quit")
+    if getattr(receiver, 'cable_detected', False):
+        lines.append(f"Controls:    [P] Mute/Live   [R] Record WAV   [M] Monitor   [+] / [-] Gain   [Q] Quit")
+    else:
+        lines.append(f"Controls:    [P] Mute/Live   [R] Record WAV   [M] Monitor   [O] Get VB-CABLE   [Q] Quit")
 
     # Notification Line (Reserved fixed row so no shifting occurs)
     if notification:
@@ -809,13 +919,18 @@ def render_full_screen(receiver, target_dev_name, notification=""):
 
 
 def main():
+    if "--check" in sys.argv or "-c" in sys.argv:
+        run_diagnostics_suite()
+        return
+
     init_windows_console()
 
     # Clear screen once on startup
     os.system('cls' if os.name == 'nt' else 'clear')
 
-    # 1. Discover audio devices
-    cable_dev, default_out, all_outputs = find_audio_devices()
+    # 1. Pre-flight check & discover audio devices
+    skip_prompt = "--quiet" in sys.argv or "--no-prompt" in sys.argv
+    cable_dev, default_out, cable_ok = run_preflight_check(skip_prompt=skip_prompt)
 
     if cable_dev:
         target_idx, target_info = cable_dev
@@ -829,12 +944,16 @@ def main():
 
     monitor_idx = default_out[0] if default_out else None
 
+    # Clear screen again after interactive pre-flight prompt
+    os.system('cls' if os.name == 'nt' else 'clear')
+
     # 2. Start Receiver
     receiver = PhoneMicReceiver(
         port=DEFAULT_PORT,
         target_device=target_idx,
         monitor_device=monitor_idx
     )
+    receiver.cable_detected = cable_ok
     receiver.start()
 
     notification_msg = ""
@@ -845,7 +964,10 @@ def main():
         notification_msg = msg
         notification_expiry = time.time() + 4.0
 
-    set_notice(f"{Colors.GREEN}[STARTED]{Colors.RESET} Listening for PhoneMic Android app")
+    if cable_ok:
+        set_notice(f"{Colors.GREEN}[STARTED]{Colors.RESET} Listening for PhoneMic Android app")
+    else:
+        set_notice(f"{Colors.YELLOW}[DEFAULT AUDIO]{Colors.RESET} Output to speakers. Press [O] for VB-CABLE")
 
     # Hide cursor to prevent cursor flashing/jitter during dashboard redraws
     hide_cursor()
@@ -887,6 +1009,12 @@ def main():
                             set_notice(f"{Colors.GREEN}[MONITOR ON]{Colors.RESET} Audio routed to headphones")
                         else:
                             set_notice(f"{Colors.DIM}[MONITOR OFF]{Colors.RESET} Headphone monitor disabled")
+                    elif char == 'o':
+                        try:
+                            webbrowser.open(VB_CABLE_PAGE)
+                            set_notice(f"{Colors.GREEN}[BROWSER]{Colors.RESET} Opened VB-CABLE download page")
+                        except Exception as e:
+                            set_notice(f"{Colors.YELLOW}[ERROR]{Colors.RESET} Could not open browser: {e}")
                     elif char in ('+', '='):
                         gain = receiver.adjust_gain(0.5)
                         set_notice(f"{Colors.CYAN}[GAIN]{Colors.RESET} Boost set to {gain:.1f}x")

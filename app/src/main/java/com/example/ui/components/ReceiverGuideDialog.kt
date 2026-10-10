@@ -260,7 +260,7 @@ private fun QuickStartTab() {
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Text("It automatically verifies Python, sounddevice & numpy, checks VB-CABLE, and prompts to install missing items with direct links.", color = TextMuted, fontSize = 10.5.sp)
+                Text("Tip: Double-click build_exe.bat to package everything into a standalone PhoneMicReceiver.exe!", color = Color(0xFF38BDF8), fontSize = 10.5.sp)
             }
         }
 

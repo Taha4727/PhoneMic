@@ -49,5 +49,28 @@ While the receiver window is open:
 - `P` : **Pause / Resume** stream (mute output without dropping network connection).
 - `M` : **Monitor Audio** (hear the microphone through your PC headphones/speakers in real-time).
 - `R` : **Record WAV** (lossless 48 kHz stereo recording saved to `PhoneMic_YYYYMMDD_HHMMSS.wav`).
+- `O` : **Get VB-CABLE** (opens VB-Audio driver download page in browser).
 - `+` / `-` : **Boost Gain** up or down in 0.5x increments.
 - `Q` : **Quit** receiver cleanly.
+
+---
+
+### 📦 Build Standalone `PhoneMicReceiver.exe` (PyInstaller)
+
+To compile the receiver and dependency checker into a **single standalone `.exe`** that runs on any Windows PC without needing Python installed:
+
+#### Method 1: Double-Click Builder (Easiest)
+Double-click **`build_exe.bat`**. It will automatically:
+1. Install PyInstaller if not already installed.
+2. Compile everything using `PhoneMicReceiver.spec` with all PortAudio DLLs and NumPy binaries bundled.
+3. Place the final `PhoneMicReceiver.exe` in the `dist/` folder and open it for you.
+
+#### Method 2: Command Line
+```cmd
+cd windows_receiver
+pip install pyinstaller sounddevice numpy
+pyinstaller --clean PhoneMicReceiver.spec
+```
+The compiled executable will be located at:
+`windows_receiver\dist\PhoneMicReceiver.exe`
+
