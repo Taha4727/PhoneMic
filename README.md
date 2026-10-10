@@ -1,3 +1,5 @@
+MADE WITH AI
+
 # PhoneMic 🎙️
 
 **PhoneMic** streams high-quality microphone audio from your Android phone directly to your Windows PC over **Wi-Fi** or **USB Tethering** with ultra-low latency.
