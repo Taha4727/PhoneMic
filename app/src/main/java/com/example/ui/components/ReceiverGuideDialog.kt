@@ -252,15 +252,15 @@ private fun QuickStartTab() {
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Step 1: One-Click Launch on PC", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                Text("In the windows_receiver folder, simply run:", color = TextSecondary, fontSize = 11.sp)
+                Text("In the windows_receiver folder, run either:", color = TextSecondary, fontSize = 11.sp)
                 Text(
-                    text = "start_receiver.bat",
+                    text = "check_dependencies.bat  (or start_receiver.bat)",
                     fontFamily = FontFamily.Monospace,
                     color = NeonCyan,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Text("It automatically installs sounddevice & numpy and displays your PC's IP address.", color = TextMuted, fontSize = 10.5.sp)
+                Text("It automatically verifies Python, sounddevice & numpy, checks VB-CABLE, and prompts to install missing items with direct links.", color = TextMuted, fontSize = 10.5.sp)
             }
         }
 

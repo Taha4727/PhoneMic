@@ -6,6 +6,12 @@ Turn your Android phone into an ultra-low latency PC microphone over **USB Tethe
 
 ### 🚀 Quick Start (Windows)
 
+#### Option 0: Dependency & Audio Diagnostic Checker (New)
+1. Double-click `check_dependencies.bat` (or run `python check_dependencies.py`).
+2. Checks Python, pip, NumPy, SoundDevice, and scans your Windows audio devices for VB-CABLE.
+3. If packages are missing, it prompts to install them automatically or provides direct links.
+4. If VB-CABLE is missing, it provides direct download links and opens the setup page in your browser.
+
 #### Option 1: One-Click Launcher (Easiest)
 1. Double-click `start_receiver.bat` (or right-click `start_receiver.ps1` and choose **Run with PowerShell**).
 2. It will automatically check Python and install `sounddevice` and `numpy` if missing.
