@@ -1,42 +1,42 @@
 @echo off
-title PhoneMic Windows Receiver v0.6.1
+title PhoneMic Windows Receiver v0.6.5
 color 0b
 echo ===============================================================================
 echo                   PhoneMic Windows Receiver Setup ^& Launcher
 echo ===============================================================================
 echo.
 
-:: 1. Check Python installation
+:: 1. If compiled .exe exists, launch it directly!
+if exist "%~dp0PhoneMicReceiver.exe" (
+    echo [*] Launching standalone PhoneMicReceiver.exe...
+    "%~dp0PhoneMicReceiver.exe" %*
+    goto :done
+)
+
+if exist "%~dp0dist\PhoneMicReceiver.exe" (
+    echo [*] Launching standalone dist\PhoneMicReceiver.exe...
+    "%~dp0dist\PhoneMicReceiver.exe" %*
+    goto :done
+)
+
+:: 2. Otherwise run via Python
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     color 0c
     echo [ERROR] Python is not installed or not in your system PATH!
-    echo Please install Python 3.9+ from python.org and check "Add Python to PATH".
+    echo Please install Python from python.org (check "Add Python to PATH"),
+    echo or compile PhoneMicReceiver.exe using build_exe.bat.
     echo.
     pause
     exit /b 1
 )
 
-echo [*] Checking required Python audio libraries (sounddevice, numpy)...
-python -c "import sounddevice, numpy" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [*] Installing missing audio libraries...
-    pip install sounddevice numpy
-    if %errorlevel% neq 0 (
-        color 0c
-        echo [ERROR] Failed to install packages. Check your internet connection.
-        pause
-        exit /b 1
-    )
-)
+:: 3. Launch unified receiver (handles dependency cache & auto-install silently)
+python "%~dp0phonemic_receiver.py" %*
 
-echo.
-echo [OK] Dependencies verified. Starting PhoneMic Receiver...
-echo.
-python "%~dp0phonemic_receiver.py"
-
+:done
 if %errorlevel% neq 0 (
     echo.
-    echo Receiver exited with an error.
+    echo Receiver exited.
     pause
 )

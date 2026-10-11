@@ -77,6 +77,12 @@ fun BatteryOptimizationBanner(
                             "POCO X6 Pro 5G • HyperOS Background Guard"
                         } else if (isPocoOrXiaomi) {
                             "Xiaomi / POCO • HyperOS Background Guard"
+                        } else if (DeviceProfile.isGalaxyJ5) {
+                            "Samsung Galaxy J5 • Battery Guard"
+                        } else if (DeviceProfile.isGalaxyA10s) {
+                            "Samsung Galaxy A10s • Device Care Guard"
+                        } else if (DeviceProfile.isSamsung) {
+                            "Samsung • Device Care Background Guard"
                         } else {
                             "Background Streaming Protection"
                         },
@@ -87,6 +93,8 @@ fun BatteryOptimizationBanner(
                     Text(
                         text = if (isPocoOrXiaomi) {
                             "HyperOS restricts background apps when screen locks. Allow battery exemption, set Battery Saver to 'No restrictions', and enable 'Autostart'."
+                        } else if (DeviceProfile.isSamsung) {
+                            "Samsung Device Care can pause background audio when screen locks. Allow exemption so microphone streams continuously."
                         } else {
                             "Prevent Android Doze from cutting Wi-Fi audio when screen locks."
                         },
@@ -134,6 +142,24 @@ fun BatteryOptimizationBanner(
                         Icon(imageVector = Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(13.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("HyperOS App Info", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                } else if (DeviceProfile.isSamsung) {
+                    OutlinedButton(
+                        onClick = {
+                            DeviceProfile.openSamsungBatterySettings(context)
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(34.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = NeonCyan
+                        ),
+                        border = ButtonDefaults.outlinedButtonBorder.copy(
+                            brush = androidx.compose.ui.graphics.SolidColor(NeonCyan.copy(alpha = 0.5f))
+                        )
+                    ) {
+                        Icon(imageVector = Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Device Care", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }

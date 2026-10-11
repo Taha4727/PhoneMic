@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller Spec File for PhoneMic Windows Receiver
-Bundles PhoneMic Receiver, SoundDevice, PortAudio DLLs, NumPy, and all dependencies
+PyInstaller Spec File for PhoneMic Windows Receiver v0.7.5
+Bundles PhoneMic Receiver, Tkinter GUI, SoundDevice, PortAudio DLLs, NumPy, and all dependencies
 into a single standalone Windows executable (PhoneMicReceiver.exe).
 """
 
@@ -17,6 +17,10 @@ hiddenimports = [
     'sounddevice',
     '_sounddevice_data',
     'numpy',
+    'tkinter',
+    'tkinter.ttk',
+    'tkinter.messagebox',
+    '_tkinter',
     'queue',
     'threading',
     'socket',
@@ -27,6 +31,8 @@ hiddenimports = [
     'platform',
     'shutil',
     'ctypes',
+    'json',
+    'subprocess',
 ]
 
 # Collect all sounddevice binaries, PortAudio DLLs, and package data
@@ -44,6 +50,15 @@ try:
     datas += np_datas
     binaries += np_binaries
     hiddenimports += np_hidden
+except Exception:
+    pass
+
+# Collect tkinter data if available
+try:
+    tk_datas, tk_binaries, tk_hidden = collect_all('tkinter')
+    datas += tk_datas
+    binaries += tk_binaries
+    hiddenimports += tk_hidden
 except Exception:
     pass
 
@@ -83,7 +98,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

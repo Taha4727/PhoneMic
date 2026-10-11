@@ -7,8 +7,10 @@ import android.os.Build
 import android.provider.Settings
 
 /**
- * Hardware and platform profiler with specific support for Android 16 (API 36)
- * and the POCO X6 Pro 5G (Xiaomi HyperOS / MediaTek Dimensity 8300 Ultra).
+ * Hardware and platform profiler with specific support for:
+ * 1. Samsung Galaxy J5 (Android 7.1.1 - API 25)
+ * 2. Samsung Galaxy A10s (Android 11 - API 30)
+ * 3. POCO X6 Pro 5G (Android 16 - API 36 / Xiaomi HyperOS)
  */
 object DeviceProfile {
 
@@ -30,13 +32,39 @@ object DeviceProfile {
                 manufacturer.contains("XIAOMI") || manufacturer.contains("POCO")
     }
 
+    val isSamsung: Boolean by lazy {
+        Build.MANUFACTURER.equals("SAMSUNG", ignoreCase = true) ||
+                Build.BRAND.equals("SAMSUNG", ignoreCase = true)
+    }
+
+    val isGalaxyJ5: Boolean by lazy {
+        isSamsung && (Build.MODEL.contains("J5", ignoreCase = true) || Build.PRODUCT.contains("j5", ignoreCase = true))
+    }
+
+    val isGalaxyA10s: Boolean by lazy {
+        isSamsung && (Build.MODEL.contains("A107", ignoreCase = true) ||
+                Build.MODEL.contains("A10S", ignoreCase = true) ||
+                Build.PRODUCT.contains("a10s", ignoreCase = true))
+    }
+
     val isAndroid16OrNewer: Boolean by lazy {
         Build.VERSION.SDK_INT >= 36 || (Build.VERSION.SDK_INT == 35 && Build.VERSION.CODENAME.equals("Baklava", ignoreCase = true))
+    }
+
+    val isAndroid11OrNewer: Boolean by lazy {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+    }
+
+    val isAndroid7: Boolean by lazy {
+        Build.VERSION.SDK_INT <= Build.VERSION_CODES.N_MR1
     }
 
     val deviceDisplayName: String by lazy {
         when {
             isPocoX6Pro -> "POCO X6 Pro 5G"
+            isGalaxyJ5 -> "Samsung Galaxy J5"
+            isGalaxyA10s -> "Samsung Galaxy A10s"
+            isSamsung -> "Samsung ${Build.MODEL}"
             Build.BRAND.equals("POCO", ignoreCase = true) -> "POCO ${Build.MODEL}"
             Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true) -> "Xiaomi ${Build.MODEL}"
             else -> "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
@@ -46,9 +74,12 @@ object DeviceProfile {
     val chipsetDisplayName: String by lazy {
         when {
             isPocoX6Pro -> "MediaTek Dimensity 8300-Ultra (Wi-Fi 6 / 5G)"
+            isGalaxyA10s -> "MediaTek Helio P22 (Octa-Core)"
+            isGalaxyJ5 -> "Qualcomm Snapdragon 410 / Exynos 7570"
             Build.HARDWARE.contains("mt", ignoreCase = true) -> "MediaTek ${Build.HARDWARE.uppercase()}"
             Build.HARDWARE.contains("qcom", ignoreCase = true) -> "Qualcomm Snapdragon"
-            else -> "Audio DSP (${Build.HARDWARE})"
+            Build.HARDWARE.contains("exynos", ignoreCase = true) -> "Samsung Exynos"
+            else -> "Audio Engine (${Build.HARDWARE})"
         }
     }
 
@@ -59,11 +90,51 @@ object DeviceProfile {
             "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
         }
 
-        if (isXiaomiOrPoco) {
-            "$base • Xiaomi HyperOS"
-        } else {
-            base
+        when {
+            isXiaomiOrPoco -> "$base • Xiaomi HyperOS"
+            isSamsung && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P -> "$base • Samsung One UI"
+            isSamsung -> "$base • Samsung Experience"
+            else -> base
         }
+    }
+
+    /**
+     * Opens vendor-specific battery and background management settings.
+     */
+    fun openDeviceOptimizationSettings(context: Context): Boolean {
+        if (isXiaomiOrPoco) {
+            return openHyperOsSettings(context)
+        } else if (isSamsung) {
+            return openSamsungBatterySettings(context)
+        }
+        return openAppDetailsSettings(context)
+    }
+
+    /**
+     * Opens Samsung Device Care / App power management settings.
+     */
+    fun openSamsungBatterySettings(context: Context): Boolean {
+        // Try Samsung Device Care (com.samsung.android.lool)
+        val samsungIntent = Intent().apply {
+            setClassName("com.samsung.android.lool", "com.samsung.android.sm.battery.ui.BatteryActivity")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(samsungIntent)
+            return true
+        } catch (_: Exception) {}
+
+        // Fallback to Samsung Smart Manager
+        val smIntent = Intent().apply {
+            setClassName("com.samsung.android.sm", "com.samsung.android.sm.ui.battery.BatteryActivity")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(smIntent)
+            return true
+        } catch (_: Exception) {}
+
+        return openAppDetailsSettings(context)
     }
 
     /**
@@ -92,7 +163,10 @@ object DeviceProfile {
             return true
         } catch (_: Exception) {}
 
-        // 3. Fallback to standard Application Details Settings (works everywhere)
+        return openAppDetailsSettings(context)
+    }
+
+    fun openAppDetailsSettings(context: Context): Boolean {
         return try {
             val appDetailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                 data = Uri.parse("package:" + context.packageName)

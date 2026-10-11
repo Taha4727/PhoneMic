@@ -287,7 +287,7 @@ fun StreamTelemetryCard(
                 if (connectionMode.isNotEmpty()) {
                     SpecRow(label = "Connection Mode", value = connectionMode)
                 }
-                SpecRow(label = "Receiver Script", value = "v0.6.3 (Python)")
+                SpecRow(label = "Receiver Script", value = "v0.6.4 (Python / EXE)")
                 SpecRow(label = "Audio Output", value = "VB-CABLE / WASAPI")
             }
         }

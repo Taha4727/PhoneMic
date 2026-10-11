@@ -79,8 +79,8 @@ try:
 except ImportError:
     msvcrt = None
 
-# PhoneMic Receiver v0.6.3 (Bidirectional Remote Control)
-VERSION = "0.6.3"
+# PhoneMic Receiver v0.6.4 (Bidirectional Remote Control)
+VERSION = "0.6.4"
 PORT = 5001
 HOST = "0.0.0.0"
 RATE, CHANNELS, FRAMES = 48000, 1, 480

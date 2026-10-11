@@ -28,6 +28,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Arrays
@@ -60,9 +61,10 @@ class PhoneMicService : Service() {
         const val EXTRA_MIC = "mic"
         const val EXTRA_GAIN = "gain"
 
+        const val MIC_STANDARD = "MIC"
+        const val MIC_CALL = "MIC"
         const val MIC_UNPROCESSED = "UNPROCESSED"
         const val MIC_RAW = "VOICE_RECOGNITION"
-        const val MIC_CALL = "MIC"
         const val MIC_CAMCORDER = "CAMCORDER"
 
         // 480 samples * 2 bytes = 960 bytes = 10 ms at 48 kHz mono 16-bit
@@ -262,19 +264,97 @@ class PhoneMicService : Service() {
     // STREAM CONTROL
     // ========================================================
 
+    private var actualSampleRate = SAMPLE_RATE
+    private var needsResampling44k = false
+
     private fun resolveMicSource(mode: String): Int {
         return when (mode) {
             MIC_UNPROCESSED -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     MediaRecorder.AudioSource.UNPROCESSED
                 } else {
-                    MediaRecorder.AudioSource.VOICE_RECOGNITION
+                    MediaRecorder.AudioSource.MIC
                 }
             }
-            MIC_CALL -> MediaRecorder.AudioSource.MIC
+            MIC_RAW -> MediaRecorder.AudioSource.VOICE_RECOGNITION
             MIC_CAMCORDER -> MediaRecorder.AudioSource.CAMCORDER
-            else -> MediaRecorder.AudioSource.VOICE_RECOGNITION
+            MIC_STANDARD, MIC_CALL -> MediaRecorder.AudioSource.MIC
+            else -> MediaRecorder.AudioSource.MIC
         }
+    }
+
+    private fun createAudioRecorder(requestedSource: Int): AudioRecord? {
+        val sampleRates = intArrayOf(48000, 44100)
+        val sourcesToTry = intArrayOf(
+            requestedSource,
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.DEFAULT
+        ).distinct().toIntArray()
+
+        for (rate in sampleRates) {
+            val minBuffer = AudioRecord.getMinBufferSize(
+                rate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            if (minBuffer <= 0) continue
+
+            val bufferSize = max(minBuffer * 2, PACKET_SIZE * 4)
+
+            for (source in sourcesToTry) {
+                try {
+                    val rec = AudioRecord(
+                        source,
+                        rate,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        bufferSize
+                    )
+                    if (rec.state == AudioRecord.STATE_INITIALIZED) {
+                        actualSampleRate = rate
+                        needsResampling44k = (rate == 44100)
+                        Log.i(TAG, "AudioRecord initialized: source=$source, rate=$rate, bufferSize=$bufferSize")
+                        return rec
+                    } else {
+                        rec.release()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed AudioRecord source=$source, rate=$rate: ${e.message}")
+                }
+            }
+        }
+        return null
+    }
+
+    private fun resample441To480(src: ByteArray, dst: ByteArray) {
+        // src has 441 16-bit samples (882 bytes), dst has 480 16-bit samples (960 bytes)
+        val step = 440f / 479f
+        for (i in 0 until 480) {
+            val pos = i * step
+            val idx = pos.toInt()
+            val frac = pos - idx
+            val s1 = getSample16(src, idx)
+            val s2 = if (idx + 1 < 441) getSample16(src, idx + 1) else s1
+            val interp = (s1 + (s2 - s1) * frac).toInt().coerceIn(-32768, 32767)
+            setSample16(dst, i, interp)
+        }
+    }
+
+    private fun getSample16(buf: ByteArray, sampleIdx: Int): Int {
+        val byteIdx = sampleIdx * 2
+        if (byteIdx + 1 >= buf.size) return 0
+        val low = buf[byteIdx].toInt() and 0xFF
+        val high = buf[byteIdx + 1].toInt()
+        var s = (high shl 8) or low
+        if (s > 32767) s -= 65536
+        return s
+    }
+
+    private fun setSample16(buf: ByteArray, sampleIdx: Int, value: Int) {
+        val byteIdx = sampleIdx * 2
+        if (byteIdx + 1 >= buf.size) return
+        buf[byteIdx] = (value and 0xFF).toByte()
+        buf[byteIdx + 1] = ((value shr 8) and 0xFF).toByte()
     }
 
     @Synchronized
@@ -301,49 +381,13 @@ class PhoneMicService : Service() {
         stopRequested = false
 
         val micSource = resolveMicSource(micMode)
-        val minBuffer = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-
-        if (minBuffer <= 0) {
-            failStart("Microphone does not support $SAMPLE_RATE Hz capture on this device")
-            return
-        }
-
-        // Initialize AudioRecord with fallback for Android 7.1.1
-        try {
-            recorder = AudioRecord(
-                micSource,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                max(minBuffer * 2, PACKET_SIZE * 4)
-            )
-        } catch (_: Exception) {
-            recorder = null
-        }
-
-        if (recorder == null || recorder?.state != AudioRecord.STATE_INITIALIZED) {
-            // Fallback to standard MIC if VOICE_RECOGNITION is unsupported
-            try {
-                recorder?.release()
-                recorder = AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    max(minBuffer * 2, PACKET_SIZE * 4)
-                )
-            } catch (_: Exception) {}
-        }
+        recorder = createAudioRecorder(micSource)
 
         val rec = recorder
         if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) {
             rec?.release()
             recorder = null
-            failStart("Could not initialize microphone")
+            failStart("Could not initialize microphone on this device")
             return
         }
 
@@ -470,16 +514,17 @@ class PhoneMicService : Service() {
         var maxAmplitude = 0
         val applyGain = abs(currentGain - 1.0f) > 0.05f
 
-        for (i in 0 until length step 2) {
+        for (i in 0 until length - 1 step 2) {
             val low = data[i].toInt() and 0xFF
             val high = data[i + 1].toInt()
             var sample = (high shl 8) or low
+            if (sample > 32767) sample -= 65536
 
             if (applyGain) {
-                val amplified = (sample * currentGain).toInt()
-                sample = amplified.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                data[i] = (sample and 0xFF).toByte()
-                data[i + 1] = ((sample shr 8) and 0xFF).toByte()
+                val amplified = (sample * currentGain).toInt().coerceIn(-32768, 32767)
+                data[i] = (amplified and 0xFF).toByte()
+                data[i + 1] = ((amplified shr 8) and 0xFF).toByte()
+                sample = amplified
             }
 
             val absSample = abs(sample)
@@ -508,7 +553,15 @@ class PhoneMicService : Service() {
 
             val out: OutputStream = socket.getOutputStream()
             val input = socket.getInputStream()
-            recorder?.startRecording()
+            
+            val rec = recorder ?: throw IOException("AudioRecord not initialized")
+            try {
+                if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    rec.startRecording()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "TCP startRecording retry: ${e.message}")
+            }
 
             setState(true, "Connected (TCP)")
 
@@ -536,10 +589,12 @@ class PhoneMicService : Service() {
             ctrlThread.isDaemon = true
             ctrlThread.start()
 
+            val raw44k = if (needsResampling44k) ByteArray(882) else ByteArray(0)
             val data = ByteArray(PACKET_SIZE)
             val silence = ByteArray(PACKET_SIZE)
             var packetsInWindow = 0
             var windowStart = SystemClock.uptimeMillis()
+            var consecutiveSilence = 0
 
             while (running) {
                 if (paused) {
@@ -552,11 +607,45 @@ class PhoneMicService : Service() {
                     continue
                 }
 
-                val rec = recorder ?: break
-                val read = rec.read(data, 0, data.size)
+                val currentRec = recorder ?: break
+                val read: Int
+                if (needsResampling44k) {
+                    val read44k = currentRec.read(raw44k, 0, raw44k.size)
+                    if (read44k > 0) {
+                        resample441To480(raw44k, data)
+                        read = PACKET_SIZE
+                    } else {
+                        read = read44k
+                    }
+                } else {
+                    read = currentRec.read(data, 0, data.size)
+                }
+
                 if (read > 0) {
                     val (level, db) = processAudioBuffer(data, read, gain)
                     reportAudioLevel(level, db)
+
+                    if (level == 0f) {
+                        consecutiveSilence++
+                        if (consecutiveSilence == 40) {
+                            Log.w(TAG, "Silence detected in TCP stream, recovering with MIC")
+                            try {
+                                recorder?.stop()
+                                recorder?.release()
+                                recorder = AudioRecord(
+                                    MediaRecorder.AudioSource.MIC,
+                                    actualSampleRate,
+                                    AudioFormat.CHANNEL_IN_MONO,
+                                    AudioFormat.ENCODING_PCM_16BIT,
+                                    PACKET_SIZE * 4
+                                )
+                                recorder?.startRecording()
+                            } catch (_: Exception) {}
+                        }
+                    } else {
+                        consecutiveSilence = 0
+                    }
+
                     out.write(data, 0, read)
                     totalPacketsSent++
                     totalBytesSent += read
@@ -594,10 +683,19 @@ class PhoneMicService : Service() {
         var socket: DatagramSocket? = null
         try {
             socket = DatagramSocket()
+            socket.soTimeout = 100
             udpSocket = socket
 
             val address = InetAddress.getByName(ip)
-            recorder?.startRecording()
+            
+            val rec = recorder ?: throw IOException("AudioRecord not initialized")
+            try {
+                if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    rec.startRecording()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "UDP startRecording retry: ${e.message}")
+            }
 
             setState(true, "Sending (UDP)")
             Log.i(TAG, "Starting UDP stream to $address:$port")
@@ -617,6 +715,8 @@ class PhoneMicService : Service() {
                                 mainHandler.post { resumeStreaming() }
                             }
                         }
+                    } catch (_: SocketTimeoutException) {
+                        // Expected: continue looping without locking socket
                     } catch (_: Exception) {
                         if (!running || myGeneration != generation) break
                     }
@@ -625,12 +725,14 @@ class PhoneMicService : Service() {
             ctrlThread.isDaemon = true
             ctrlThread.start()
 
+            val raw44k = if (needsResampling44k) ByteArray(882) else ByteArray(0)
             val audio = ByteArray(PACKET_SIZE)
             val packet = ByteArray(PACKET_SIZE + 8)
             val silence = ByteArray(PACKET_SIZE)
             var sequence = 0
             var packetsInWindow = 0
             var windowStart = SystemClock.uptimeMillis()
+            var consecutiveSilence = 0
 
             // Pre-create DatagramPacket for high performance and zero GC pauses on Android 7.1.1
             val udpPacket = DatagramPacket(packet, packet.size, address, port)
@@ -648,8 +750,20 @@ class PhoneMicService : Service() {
                     continue
                 }
 
-                val rec = recorder ?: break
-                val read = rec.read(audio, 0, audio.size)
+                val currentRec = recorder ?: break
+                val read: Int
+                if (needsResampling44k) {
+                    val read44k = currentRec.read(raw44k, 0, raw44k.size)
+                    if (read44k > 0) {
+                        resample441To480(raw44k, audio)
+                        read = PACKET_SIZE
+                    } else {
+                        read = read44k
+                    }
+                } else {
+                    read = currentRec.read(audio, 0, audio.size)
+                }
+
                 if (read < 0) {
                     throw IOException("AudioRecord error $read")
                 }
@@ -660,6 +774,27 @@ class PhoneMicService : Service() {
 
                 val (level, db) = processAudioBuffer(audio, read, gain)
                 reportAudioLevel(level, db)
+
+                if (level == 0f) {
+                    consecutiveSilence++
+                    if (consecutiveSilence == 40) {
+                        Log.w(TAG, "Silence detected in UDP stream, recovering with MIC")
+                        try {
+                            recorder?.stop()
+                            recorder?.release()
+                            recorder = AudioRecord(
+                                MediaRecorder.AudioSource.MIC,
+                                actualSampleRate,
+                                AudioFormat.CHANNEL_IN_MONO,
+                                AudioFormat.ENCODING_PCM_16BIT,
+                                PACKET_SIZE * 4
+                            )
+                            recorder?.startRecording()
+                        } catch (_: Exception) {}
+                    }
+                } else {
+                    consecutiveSilence = 0
+                }
 
                 writeHeader(packet, sequence++)
                 System.arraycopy(audio, 0, packet, 8, read)

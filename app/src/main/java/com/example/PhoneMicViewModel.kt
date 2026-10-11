@@ -24,10 +24,12 @@ import java.util.regex.Pattern
 
 data class PhoneMicUiState(
     val ip: String = "192.168.1.100",
+    val wifiIp: String = "192.168.1.100",
+    val usbIp: String = "192.168.42.129",
     val port: String = "5001",
     val connectionMode: String = PhoneMicService.CONNECTION_WIFI,
     val transportMode: String = PhoneMicService.TRANSPORT_UDP,
-    val micMode: String = PhoneMicService.MIC_RAW,
+    val micMode: String = PhoneMicService.MIC_STANDARD,
     val gain: Float = 1.0f,
     val isRunning: Boolean = false,
     val isPaused: Boolean = false,
@@ -40,11 +42,11 @@ data class PhoneMicUiState(
     val scanFeedback: String? = null,
     val showGuideDialog: Boolean = false,
     val isIgnoringBatteryOptimizations: Boolean = true,
-    // Stream telemetry matched with Windows Receiver v0.6.3
+    // Stream telemetry matched with Windows Receiver v0.6.5
     val packetsSent: Long = 0L,
     val bytesSent: Long = 0L,
     val packetRate: Float = 0f,
-    val receiverVersion: String = "Windows Receiver v0.6.3",
+    val receiverVersion: String = "Windows Receiver v0.6.5",
     val targetAudioDevice: String = "CABLE Input (VB-Audio Virtual Cable)"
 )
 
@@ -53,6 +55,8 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     companion object {
         private const val PREFS_NAME = "PhoneMicSettings"
         private const val PREF_IP = "ip"
+        private const val PREF_WIFI_IP = "wifi_ip"
+        private const val PREF_USB_IP = "usb_ip"
         private const val PREF_PORT = "port"
         private const val PREF_TRANSPORT = "transport"
         private const val PREF_CONNECTION = "connection"
@@ -67,6 +71,11 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     private val prefs: SharedPreferences = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val _uiState = MutableStateFlow(loadInitialState())
     val uiState: StateFlow<PhoneMicUiState> = _uiState.asStateFlow()
+
+    // Isolated high-frequency audio peak level flow:
+    // Prevents recomposing the entire screen 12x/sec during streaming on budget devices like Galaxy A10s!
+    private val _audioDb = MutableStateFlow(-60f)
+    val audioDb: StateFlow<Float> = _audioDb.asStateFlow()
 
     private var phoneMicService: PhoneMicService? = null
     private var serviceBound = false
@@ -122,20 +131,26 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     }
 
     init {
-        bindService(application)
+        // Defer service binding to Activity.onStart to prevent cold launch freeze
         checkBatteryOptimization()
     }
 
     private fun loadInitialState(): PhoneMicUiState {
-        val savedIp = prefs.getString(PREF_IP, "192.168.1.100") ?: "192.168.1.100"
+        val legacyIp = prefs.getString(PREF_IP, "192.168.1.100") ?: "192.168.1.100"
+        val savedWifiIp = prefs.getString(PREF_WIFI_IP, legacyIp) ?: legacyIp
+        val savedUsbIp = prefs.getString(PREF_USB_IP, "192.168.42.129") ?: "192.168.42.129"
         val savedPort = prefs.getString(PREF_PORT, "5001") ?: "5001"
         val savedTransport = prefs.getString(PREF_TRANSPORT, PhoneMicService.TRANSPORT_UDP) ?: PhoneMicService.TRANSPORT_UDP
         val savedConnection = prefs.getString(PREF_CONNECTION, PhoneMicService.CONNECTION_WIFI) ?: PhoneMicService.CONNECTION_WIFI
-        val savedMic = prefs.getString(PREF_MIC, PhoneMicService.MIC_RAW) ?: PhoneMicService.MIC_RAW
+        val savedMic = prefs.getString(PREF_MIC, PhoneMicService.MIC_STANDARD) ?: PhoneMicService.MIC_STANDARD
         val savedGain = prefs.getFloat(PREF_GAIN, 1.0f)
 
+        val activeIp = if (savedConnection == PhoneMicService.CONNECTION_USB) savedUsbIp else savedWifiIp
+
         return PhoneMicUiState(
-            ip = savedIp,
+            ip = activeIp,
+            wifiIp = savedWifiIp,
+            usbIp = savedUsbIp,
             port = savedPort,
             connectionMode = savedConnection,
             transportMode = savedTransport,
@@ -171,7 +186,14 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setIp(newIp: String) {
-        _uiState.update { it.copy(ip = newIp.trim(), scanFeedback = null) }
+        val cleanIp = newIp.trim()
+        _uiState.update { current ->
+            if (current.connectionMode == PhoneMicService.CONNECTION_USB) {
+                current.copy(ip = cleanIp, usbIp = cleanIp, scanFeedback = null)
+            } else {
+                current.copy(ip = cleanIp, wifiIp = cleanIp, scanFeedback = null)
+            }
+        }
         savePreferences()
     }
 
@@ -181,7 +203,14 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setConnectionMode(mode: String) {
-        _uiState.update { it.copy(connectionMode = mode) }
+        _uiState.update { current ->
+            val targetIp = if (mode == PhoneMicService.CONNECTION_USB) current.usbIp else current.wifiIp
+            current.copy(
+                connectionMode = mode,
+                ip = targetIp,
+                scanFeedback = null
+            )
+        }
         savePreferences()
     }
 
@@ -304,12 +333,23 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             preferUsb,
             object : ReceiverDiscovery.Callback {
                 override fun onFound(ip: String) {
-                    _uiState.update {
-                        it.copy(
-                            isScanningPc = false,
-                            ip = ip,
-                            scanFeedback = "Found PhoneMic Receiver v0.6.3 at $ip"
-                        )
+                    _uiState.update { current ->
+                        val isUsb = current.connectionMode == PhoneMicService.CONNECTION_USB
+                        if (isUsb) {
+                            current.copy(
+                                isScanningPc = false,
+                                ip = ip,
+                                usbIp = ip,
+                                scanFeedback = "Found PhoneMic Receiver at $ip (USB)"
+                            )
+                        } else {
+                            current.copy(
+                                isScanningPc = false,
+                                ip = ip,
+                                wifiIp = ip,
+                                scanFeedback = "Found PhoneMic Receiver at $ip (Wi-Fi)"
+                            )
+                        }
                     }
                     savePreferences()
                 }
@@ -342,6 +382,8 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         val state = _uiState.value
         prefs.edit()
             .putString(PREF_IP, state.ip)
+            .putString(PREF_WIFI_IP, state.wifiIp)
+            .putString(PREF_USB_IP, state.usbIp)
             .putString(PREF_PORT, state.port)
             .putString(PREF_TRANSPORT, state.transportMode)
             .putString(PREF_CONNECTION, state.connectionMode)
@@ -364,6 +406,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             startElapsedTicker()
         } else {
             stopElapsedTicker()
+            _audioDb.value = -60f
             _uiState.update {
                 it.copy(
                     audioLevel = 0f,
@@ -376,12 +419,9 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onAudioLevel(normalizedLevel: Float, peakDb: Float) {
-        _uiState.update {
-            it.copy(
-                audioLevel = normalizedLevel,
-                audioDb = peakDb
-            )
-        }
+        // High-frequency stream level: only update the isolated StateFlow!
+        // Does not trigger recomposition of the main screen or text fields!
+        _audioDb.value = peakDb
     }
 
     override fun onTelemetry(packetsSent: Long, bytesSent: Long, packetRate: Float) {

@@ -80,6 +80,7 @@ fun PhoneMicScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val audioDb by viewModel.audioDb.collectAsState()
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -373,7 +374,7 @@ fun PhoneMicScreen(
                                 port = uiState.port,
                                 transportMode = uiState.transportMode,
                                 connectionMode = uiState.connectionMode,
-                                audioDb = uiState.audioDb,
+                                audioDb = audioDb,
                                 onStartClick = { handleStartStream() },
                                 onPauseClick = { viewModel.togglePause() },
                                 onStopClick = { viewModel.stopStreaming(context) }

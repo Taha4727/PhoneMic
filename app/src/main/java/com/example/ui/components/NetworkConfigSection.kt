@@ -133,8 +133,20 @@ fun NetworkConfigSection(
                 value = ip,
                 onValueChange = onIpChange,
                 enabled = isEnabled,
-                label = { Text("Receiver IP", fontSize = 10.5.sp, maxLines = 1) },
-                placeholder = { Text("192.168.1.100", fontSize = 11.5.sp, color = TextMuted) },
+                label = {
+                    Text(
+                        if (connectionMode == PhoneMicService.CONNECTION_USB) "USB Host IP" else "Wi-Fi Receiver IP",
+                        fontSize = 10.5.sp,
+                        maxLines = 1
+                    )
+                },
+                placeholder = {
+                    Text(
+                        if (connectionMode == PhoneMicService.CONNECTION_USB) "192.168.42.129" else "192.168.1.100",
+                        fontSize = 11.5.sp,
+                        color = TextMuted
+                    )
+                },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 isError = ip.isNotEmpty() && !isValidIp,
@@ -269,75 +281,158 @@ fun NetworkConfigSection(
             }
         }
 
-        // Quick Route & Protocol Toggles
+        // Explicit Segmented Route & Protocol Selectors
         if (onConnectionModeChange != null && onTransportModeChange != null) {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // Route Toggle (Wi-Fi vs USB)
+                // Route Selector (Explicit Wi-Fi vs USB Tabs)
                 val isWifi = connectionMode == PhoneMicService.CONNECTION_WIFI
-                Box(
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(34.dp)
-                        .background(Color(0xFF0F1622), RoundedCornerShape(6.dp))
-                        .border(
-                            1.dp,
-                            if (isWifi) NeonCyan.copy(alpha = 0.7f) else Color(0xFF223044),
-                            RoundedCornerShape(6.dp)
-                        )
-                        .clickable(enabled = isEnabled) {
-                            onConnectionModeChange(if (isWifi) PhoneMicService.CONNECTION_USB else PhoneMicService.CONNECTION_WIFI)
-                        }
-                        .padding(horizontal = 6.dp),
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .background(Color(0xFF090D16), RoundedCornerShape(8.dp))
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    // Wi-Fi Button
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                            .background(
+                                if (isWifi) NeonCyan.copy(alpha = 0.18f) else Color.Transparent,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .border(
+                                1.dp,
+                                if (isWifi) NeonCyan else Color.Transparent,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .clickable(enabled = isEnabled) {
+                                if (!isWifi) onConnectionModeChange(PhoneMicService.CONNECTION_WIFI)
+                            },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = if (isWifi) Icons.Default.Wifi else Icons.Default.Usb,
-                            contentDescription = null,
-                            tint = if (isWifi) NeonCyan else Color(0xFF38BDF8),
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Text(
-                            text = if (isWifi) "Wi-Fi" else "USB Tether",
-                            color = TextPrimary,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Wifi,
+                                contentDescription = null,
+                                tint = if (isWifi) NeonCyan else TextSecondary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "Wi-Fi Mode",
+                                color = if (isWifi) Color.White else TextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = if (isWifi) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+
+                    // USB Tether Button
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                            .background(
+                                if (!isWifi) Color(0xFF10B981).copy(alpha = 0.18f) else Color.Transparent,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .border(
+                                1.dp,
+                                if (!isWifi) Color(0xFF10B981) else Color.Transparent,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .clickable(enabled = isEnabled) {
+                                if (isWifi) onConnectionModeChange(PhoneMicService.CONNECTION_USB)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Usb,
+                                contentDescription = null,
+                                tint = if (!isWifi) Color(0xFF10B981) else TextSecondary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "USB Tether Mode",
+                                color = if (!isWifi) Color.White else TextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = if (!isWifi) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
                     }
                 }
 
-                // Transport Toggle (UDP vs TCP)
+                // Transport Selector (UDP vs TCP)
                 val isUdp = transportMode == PhoneMicService.TRANSPORT_UDP
-                Box(
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(34.dp)
-                        .background(Color(0xFF0F1622), RoundedCornerShape(6.dp))
-                        .border(
-                            1.dp,
-                            if (isUdp) NeonCyan.copy(alpha = 0.7f) else Color(0xFF223044),
-                            RoundedCornerShape(6.dp)
-                        )
-                        .clickable(enabled = isEnabled) {
-                            onTransportModeChange(if (isUdp) PhoneMicService.TRANSPORT_TCP else PhoneMicService.TRANSPORT_UDP)
-                        }
-                        .padding(horizontal = 6.dp),
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .background(Color(0xFF090D16), RoundedCornerShape(8.dp))
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(
-                        text = if (isUdp) "UDP (Low Latency)" else "TCP (Lossless)",
-                        color = if (isUdp) NeonCyan else TextPrimary,
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(30.dp)
+                            .background(
+                                if (isUdp) NeonCyan.copy(alpha = 0.18f) else Color.Transparent,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .border(
+                                1.dp,
+                                if (isUdp) NeonCyan else Color.Transparent,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .clickable(enabled = isEnabled) {
+                                if (!isUdp) onTransportModeChange(PhoneMicService.TRANSPORT_UDP)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "UDP (Low Latency)",
+                            color = if (isUdp) NeonCyan else TextSecondary,
+                            fontSize = 10.5.sp,
+                            fontWeight = if (isUdp) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(30.dp)
+                            .background(
+                                if (!isUdp) Color(0xFF38BDF8).copy(alpha = 0.18f) else Color.Transparent,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .border(
+                                1.dp,
+                                if (!isUdp) Color(0xFF38BDF8) else Color.Transparent,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .clickable(enabled = isEnabled) {
+                                if (isUdp) onTransportModeChange(PhoneMicService.TRANSPORT_TCP)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "TCP (Lossless)",
+                            color = if (!isUdp) Color(0xFF38BDF8) else TextSecondary,
+                            fontSize = 10.5.sp,
+                            fontWeight = if (!isUdp) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
                 }
             }
 

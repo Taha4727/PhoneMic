@@ -1,39 +1,37 @@
 package com.example
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.LinkAddress
-import android.net.Network
-import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
-import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
 import java.util.Collections
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Finds the PC running the receiver so the IP address does not have to be manually typed.
- * Sends discovery query "PMD0" and listens for "PMA1" reply from receiver.
- * Fully compatible with Android 7.1.1 (API 25) and Android 10 (API 29).
+ * High-speed PC receiver auto-discovery engine.
+ * Supports Android 7.1.1 (Samsung Galaxy J5), Android 11 (Samsung A10s), and Android 16 (POCO X6 Pro).
+ *
+ * Employs a hybrid discovery model:
+ * 1. Broadcast queries (255.255.255.255 & subnet broadcast)
+ * 2. Unicast sweep across local /24 subnet (bypasses Wi-Fi router AP/broadcast isolation)
+ * 3. Direct tethering host IPs (USB RNDIS 192.168.42.x, Windows Hotspot 192.168.137.1)
  */
 object ReceiverDiscovery {
 
     private const val TAG = "PhoneMic-Discovery"
     private const val QUERY = "PMD0"
-    private const val REPLY = "PMA1"
-    private const val QUERY_INTERVAL_MS = 250
-    private const val PACKET_BUFFER = 64
+    private const val REPLY_PREFIX = "PMA"
+    private const val PACKET_BUFFER = 128
 
     interface Callback {
         fun onFound(ip: String)
@@ -46,11 +44,10 @@ object ReceiverDiscovery {
         preferUsb: Boolean,
         callback: Callback
     ) {
-        val targets = broadcastTiers(context, preferUsb)
         val mainHandler = Handler(Looper.getMainLooper())
 
         val worker = Thread({
-            // Acquire MulticastLock: Critical for Android 7.1.1 & 10 to receive broadcast UDP replies
+            // Acquire MulticastLock: Critical for Android 7.1.1, 11, & 16 to receive UDP discovery packets
             val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             val multicastLock = wm?.createMulticastLock("PhoneMic:Discovery")
             multicastLock?.setReferenceCounted(false)
@@ -59,12 +56,12 @@ object ReceiverDiscovery {
             } catch (_: Exception) {}
 
             try {
-                val result = search(targets, port)
+                val foundIp = executeDiscovery(port, preferUsb)
                 mainHandler.post {
-                    if (result.ip != null) {
-                        callback.onFound(result.ip)
+                    if (foundIp != null) {
+                        callback.onFound(foundIp)
                     } else {
-                        callback.onFailed(result.reason ?: "No PC receiver answered")
+                        callback.onFailed("No PC receiver found. Ensure receiver is running on PC (Port $port)")
                     }
                 }
             } finally {
@@ -72,271 +69,242 @@ object ReceiverDiscovery {
                     multicastLock?.release()
                 } catch (_: Exception) {}
             }
-        }, "PhoneMic-Discovery")
+        }, "PhoneMic-DiscoveryWorker")
+
         worker.isDaemon = true
         worker.start()
     }
 
-    private data class Result(val ip: String?, val reason: String?)
-
-    private fun search(tiers: List<List<String>>, port: Int): Result {
-        if (tiers.isEmpty()) {
-            return Result(null, "No network interface available")
-        }
-
+    private fun executeDiscovery(port: Int, preferUsb: Boolean): String? {
         var socket: DatagramSocket? = null
+        val found = AtomicBoolean(false)
+        var discoveredIp: String? = null
+
         try {
             socket = DatagramSocket()
             socket.broadcast = true
+            socket.soTimeout = 350
 
             val query = QUERY.toByteArray(StandardCharsets.US_ASCII)
             val buffer = ByteArray(PACKET_BUFFER)
 
-            for (t in tiers.indices) {
-                val tier = tiers[t]
-                if (tier.isEmpty()) continue
+            // Gather local subnets and interfaces
+            val localNics = getActiveSubnets()
+            val targetIps = LinkedHashSet<String>()
 
-                Log.i(TAG, "Tier $t searching: $tier on port $port")
-                val tierDeadline = SystemClock.elapsedRealtime() + tierTimeoutMillis(t)
+            // 1. Direct gateway & USB tethering host addresses
+            // Note: On Windows RNDIS tethering, the PC is typically assigned 192.168.42.129, 192.168.42.1, or 192.168.42.2
+            val usbTetherHosts = listOf(
+                "192.168.42.129", // Standard Windows RNDIS host IP
+                "192.168.42.1",   // Alternative tether gateway
+                "192.168.42.2",   // Secondary tether IP
+                "192.168.42.3",
+                "192.168.42.255", // USB subnet broadcast
+                "192.168.137.1",  // Windows Mobile Hotspot default host IP
+                "192.168.137.255"
+            )
 
-                while (SystemClock.elapsedRealtime() < tierDeadline) {
-                    for (target in tier) {
-                        try {
-                            socket.send(
-                                DatagramPacket(
-                                    query,
-                                    query.size,
-                                    InetSocketAddress(target, port)
-                                )
-                            )
-                        } catch (_: Exception) {
-                            // Target might be unreachable, try next in tier
-                        }
-                    }
+            val wifiCommonHosts = listOf(
+                "192.168.1.1",
+                "192.168.0.1",
+                "192.168.43.1"
+            )
 
-                    val remaining = tierDeadline - SystemClock.elapsedRealtime()
-                    val wait = Math.min(QUERY_INTERVAL_MS.toLong(), Math.max(1L, remaining)).toInt()
+            if (preferUsb) {
+                targetIps.addAll(usbTetherHosts)
+            } else {
+                targetIps.addAll(wifiCommonHosts)
+            }
 
-                    socket.soTimeout = wait
+            // 2. Add broadcast targets
+            targetIps.add("255.255.255.255")
+            for (nic in localNics) {
+                if (nic.broadcast != null) {
+                    targetIps.add(nic.broadcast)
+                }
+            }
+
+            if (!preferUsb) {
+                targetIps.addAll(usbTetherHosts)
+            }
+
+            // Dedicated Listener Thread
+            val listenerThread = Thread({
+                val responsePacket = DatagramPacket(buffer, buffer.size)
+                while (!found.get() && !Thread.currentThread().isInterrupted) {
                     try {
-                        val response = DatagramPacket(buffer, buffer.size)
-                        socket.receive(response)
-
-                        val payload = String(
-                            response.data,
+                        socket.receive(responsePacket)
+                        val text = String(
+                            responsePacket.data,
                             0,
-                            response.length,
+                            responsePacket.length,
                             StandardCharsets.US_ASCII
                         ).trim()
 
-                        Log.i(TAG, "Received response from ${response.socketAddress}: '$payload'")
+                        Log.i(TAG, "Discovery reply from ${responsePacket.address}: '$text' (preferUsb=$preferUsb)")
 
-                        if (payload.contains(REPLY) || payload.startsWith("PMA")) {
-                            val from = response.address
-                            if (from is Inet4Address) {
-                                val host = from.hostAddress
-                                Log.i(TAG, "Found receiver at $host")
-                                return Result(host, null)
+                        if (text.startsWith(REPLY_PREFIX)) {
+                            val sender = responsePacket.address
+                            if (sender is Inet4Address) {
+                                val host = sender.hostAddress ?: ""
+                                // Extract embedded IP in reply if provided: "PMA1 0.6.5 192.168.42.129"
+                                val parts = text.split(" ")
+                                val embeddedIp = if (parts.size >= 3 && parts[2].matches(Regex("^(\\d{1,3}\\.){3}\\d{1,3}$"))) {
+                                    parts[2]
+                                } else {
+                                    null
+                                }
+
+                                val chosenIp: String = if (preferUsb) {
+                                    // In USB mode: Prioritize the USB network interface (192.168.42.x or 192.168.137.x).
+                                    // Never allow a Wi-Fi IP (e.g. 192.168.1.x) to hijack USB mode.
+                                    if (host.startsWith("192.168.42.") || host.startsWith("192.168.137.")) {
+                                        host
+                                    } else if (embeddedIp != null && (embeddedIp.startsWith("192.168.42.") || embeddedIp.startsWith("192.168.137."))) {
+                                        embeddedIp
+                                    } else {
+                                        // If reply arrived over USB link but host reports something else, socket sender address is real
+                                        host.ifEmpty { embeddedIp ?: "" }
+                                    }
+                                } else {
+                                    // In Wi-Fi mode: Prefer embedded IP or sender IP, avoiding USB tether subnets
+                                    if (embeddedIp != null && !embeddedIp.startsWith("192.168.42.")) {
+                                        embeddedIp
+                                    } else if (!host.startsWith("192.168.42.")) {
+                                        host
+                                    } else {
+                                        embeddedIp ?: host
+                                    }
+                                }
+
+                                if (chosenIp.isNotBlank()) {
+                                    discoveredIp = chosenIp
+                                    found.set(true)
+                                    break
+                                }
                             }
                         }
                     } catch (_: SocketTimeoutException) {
-                        // Expected: continue querying
+                        // Continue listening
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }, "PhoneMic-DiscoveryListener")
+            listenerThread.isDaemon = true
+            listenerThread.start()
+
+            val deadline = SystemClock.elapsedRealtime() + 3500L
+
+            // Stage 1: Send to primary targets and broadcasts
+            for (ip in targetIps) {
+                if (found.get()) break
+                sendQuery(socket, query, ip, port)
+            }
+
+            // Stage 2: Sweep USB subnet (192.168.42.x) if in USB mode to guarantee hit on Samsung/Xiaomi
+            if (preferUsb) {
+                for (hostNum in 1..254) {
+                    if (found.get()) break
+                    sendQuery(socket, query, "192.168.42.$hostNum", port)
+                    if (hostNum % 32 == 0) {
+                        Thread.sleep(3)
                     }
                 }
             }
 
-            return Result(null, "No PC answered. Ensure python script is running and Windows Firewall allows port $port.")
+            // Stage 3: Fast Unicast Subnet Sweep across local /24 subnets
+            for (nic in localNics) {
+                if (found.get()) break
+                val base = nic.subnetPrefix ?: continue
+                val myHostNum = nic.myHostNum
+
+                // If in USB mode, skip sweeping standard Wi-Fi if already checked
+                if (preferUsb && (base.startsWith("192.168.1") || base.startsWith("192.168.0"))) {
+                    continue
+                }
+
+                // Sweep 1..254 (skip phone's own IP)
+                for (hostNum in 1..254) {
+                    if (found.get()) break
+                    if (hostNum == myHostNum) continue
+                    val target = "$base.$hostNum"
+                    sendQuery(socket, query, target, port)
+
+                    // Small yield every 32 packets to prevent socket buffer congestion
+                    if (hostNum % 32 == 0) {
+                        Thread.sleep(3)
+                    }
+                }
+            }
+
+            // Stage 4: Wait for listener to receive response or timeout
+            while (!found.get() && SystemClock.elapsedRealtime() < deadline) {
+                // Re-send to primary targets periodically
+                for (ip in targetIps) {
+                    if (found.get()) break
+                    sendQuery(socket, query, ip, port)
+                }
+                Thread.sleep(200)
+            }
+
+            listenerThread.interrupt()
+            return discoveredIp
+
         } catch (e: Exception) {
             Log.e(TAG, "Discovery error", e)
-            return Result(null, e.message ?: "Search failed")
+            return null
         } finally {
-            socket?.close()
+            try {
+                socket?.close()
+            } catch (_: Exception) {}
         }
     }
 
-    private fun broadcastTiers(context: Context, preferUsb: Boolean): List<List<String>> {
-        val preferred = LinkedHashSet<String>()
-        val secondary = LinkedHashSet<String>()
-        val others = LinkedHashSet<String>()
-
-        // 1. Direct gateway and common tethering host IPs (Unicast - never blocked by router broadcast filters)
-        val knownHosts = listOf(
-            "192.168.137.1", // Windows Mobile Hotspot default host IP
-            "192.168.42.1",   // Common USB tether host IP
-            "192.168.42.2",
-            "192.168.43.1",   // Common Android hotspot host IP
-            "192.168.1.1",
-            "192.168.0.1"
-        )
-        if (preferUsb) {
-            preferred.addAll(knownHosts)
-        } else {
-            secondary.addAll(knownHosts)
-        }
-
-        // 2. Hardware network interfaces (rndis for USB on Android 7.1.1, wlan for Wi-Fi)
-        for (candidate in usableInterfaces()) {
-            val broadcast = broadcastFor(candidate.address, candidate.prefixLength)
-            if (broadcast != null) {
-                when (classify(candidate.name)) {
-                    KIND_TETHER -> (if (preferUsb) preferred else secondary).add(broadcast)
-                    KIND_WIFI -> (if (preferUsb) secondary else preferred).add(broadcast)
-                    else -> others.add(broadcast)
-                }
-            }
-        }
-
-        // 3. ConnectivityManager networks
-        val cm = connectivityManager(context)
-        if (cm != null) {
-            for (network in reportedNetworks(cm)) {
-                val tether = hasTetherTransport(cm, network)
-                val targetSet = if (tether) {
-                    if (preferUsb) preferred else secondary
-                } else {
-                    if (preferUsb) secondary else preferred
-                }
-                targetSet.addAll(networkBroadcasts(cm, network))
-            }
-        }
-
-        return listOf(
-            preferred.toList(),
-            secondary.toList(),
-            others.toList(),
-            listOf("255.255.255.255")
-        )
-    }
-
-    private fun tierTimeoutMillis(tierIndex: Int): Long {
-        return when (tierIndex) {
-            0 -> 1500L
-            1 -> 1200L
-            else -> 800L
+    private fun sendQuery(socket: DatagramSocket, query: ByteArray, target: String, port: Int) {
+        try {
+            val addr = InetSocketAddress(target, port)
+            socket.send(DatagramPacket(query, query.size, addr))
+        } catch (_: Exception) {
+            // Target might be unreachable or interface temporarily down
         }
     }
 
-    private const val KIND_TETHER = 0
-    private const val KIND_WIFI = 1
-    private const val KIND_OTHER = 2
-
-    private fun classify(name: String?): Int {
-        if (name == null) return KIND_OTHER
-        val lower = name.lowercase()
-        return when {
-            lower.startsWith("rndis") || lower.startsWith("usb") || lower.startsWith("eth") -> KIND_TETHER
-            lower.startsWith("wlan") -> KIND_WIFI
-            else -> KIND_OTHER
-        }
-    }
-
-    private data class InterfaceCandidate(
-        val name: String,
-        val address: InetAddress,
-        val prefixLength: Int
+    private data class NicInfo(
+        val ip: String,
+        val subnetPrefix: String?,
+        val myHostNum: Int,
+        val broadcast: String?
     )
 
-    private fun usableInterfaces(): List<InterfaceCandidate> {
-        val result = mutableListOf<InterfaceCandidate>()
+    private fun getActiveSubnets(): List<NicInfo> {
+        val list = mutableListOf<NicInfo>()
         try {
-            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return result
-            for (nic in Collections.list(interfaces)) {
+            val nics = NetworkInterface.getNetworkInterfaces() ?: return list
+            for (nic in Collections.list(nics)) {
                 if (nic.isLoopback || !nic.isUp) continue
-                val name = nic.name
                 for (info in nic.interfaceAddresses) {
                     val addr = info.address
-                    if (addr is Inet4Address) {
-                        result.add(
-                            InterfaceCandidate(
-                                name = name,
-                                address = addr,
-                                prefixLength = info.networkPrefixLength.toInt()
+                    if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                        val hostIp = addr.hostAddress ?: continue
+                        val parts = hostIp.split(".")
+                        if (parts.size == 4) {
+                            val prefix = "${parts[0]}.${parts[1]}.${parts[2]}"
+                            val hostNum = parts[3].toIntOrNull() ?: -1
+                            val broadcast = info.broadcast?.hostAddress ?: "$prefix.255"
+                            list.add(
+                                NicInfo(
+                                    ip = hostIp,
+                                    subnetPrefix = prefix,
+                                    myHostNum = hostNum,
+                                    broadcast = broadcast
+                                )
                             )
-                        )
+                        }
                     }
                 }
             }
-        } catch (_: SocketException) {
-        }
-        return result
-    }
-
-    private fun hasTetherTransport(cm: ConnectivityManager, network: Network): Boolean {
-        return try {
-            val caps = cm.getNetworkCapabilities(network)
-            caps != null && (
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_USB) ||
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-            )
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun connectivityManager(context: Context): ConnectivityManager? {
-        return try {
-            context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun reportedNetworks(cm: ConnectivityManager): List<Network> {
-        val result = mutableListOf<Network>()
-        try {
-            for (network in cm.allNetworks) {
-                val caps = cm.getNetworkCapabilities(network) ?: continue
-                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_USB) ||
-                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
-                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                ) {
-                    result.add(network)
-                }
-            }
-        } catch (_: Exception) {
-        }
-        return result
-    }
-
-    private fun networkBroadcasts(cm: ConnectivityManager, network: Network): List<String> {
-        val result = mutableListOf<String>()
-        try {
-            val properties = cm.getLinkProperties(network) ?: return result
-            for (link in properties.linkAddresses) {
-                val b = broadcastFor(link.address, link.prefixLength)
-                if (b != null) result.add(b)
-            }
-        } catch (_: Exception) {
-        }
-        return result
-    }
-
-    private fun broadcastFor(address: InetAddress, prefixLength: Int): String? {
-        if (address !is Inet4Address || prefixLength !in 0..32) {
-            return null
-        }
-        val octets = address.address ?: return null
-        if (octets.size != 4) return null
-
-        var value = 0
-        for (i in 0..3) {
-            value = (value shl 8) or (octets[i].toInt() and 0xFF)
-        }
-
-        val networkMask = if (prefixLength == 0) 0 else ((1.toLong() shl (32 - prefixLength)) - 1).inv().toInt()
-        val broadcastValue = (value and networkMask) or networkMask.inv()
-
-        val broadcast = byteArrayOf(
-            (broadcastValue ushr 24).toByte(),
-            (broadcastValue ushr 16).toByte(),
-            (broadcastValue ushr 8).toByte(),
-            broadcastValue.toByte()
-        )
-
-        return try {
-            InetAddress.getByAddress(broadcast).hostAddress
-        } catch (_: Exception) {
-            null
-        }
+        } catch (_: Exception) {}
+        return list
     }
 }

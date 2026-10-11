@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,6 +33,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -231,16 +235,21 @@ fun HeroMicControl(
                     )
                 }
 
-                // Segmented LED Meter Bar (18 segments)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                // High-performance hardware-accelerated Canvas LED Meter (18 segments, 0 layout allocations)
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(7.dp)
                 ) {
                     val totalSegments = 18
                     val activeSegments = if (isRunning && !isPaused) {
                         ((audioDb + 60f) / 60f * totalSegments).toInt().coerceIn(0, totalSegments)
                     } else 0
+
+                    val spacingPx = 2.dp.toPx()
+                    val totalSpacing = spacingPx * (totalSegments - 1)
+                    val segmentWidth = (size.width - totalSpacing) / totalSegments
+                    val cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx())
 
                     for (index in 0 until totalSegments) {
                         val isActive = index < activeSegments
@@ -249,15 +258,12 @@ fun HeroMicControl(
                             index >= 11 -> StreamWarningAmber
                             else -> StreamActiveGreen
                         }
-
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(7.dp)
-                                .background(
-                                    color = if (isActive) segmentColor else Color(0xFF192331),
-                                    shape = RoundedCornerShape(1.dp)
-                                )
+                        val x = index * (segmentWidth + spacingPx)
+                        drawRoundRect(
+                            color = if (isActive) segmentColor else Color(0xFF192331),
+                            topLeft = Offset(x, 0f),
+                            size = Size(segmentWidth, size.height),
+                            cornerRadius = cornerRadius
                         )
                     }
                 }

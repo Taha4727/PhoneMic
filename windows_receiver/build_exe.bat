@@ -1,9 +1,9 @@
 @echo off
-title Build PhoneMicReceiver.exe (PyInstaller)
+title Build PhoneMicReceiver.exe (PyInstaller GUI Builder)
 color 0b
 
 echo ===============================================================================
-echo            PhoneMic Windows Receiver - Standalone .EXE Builder
+echo            PhoneMic Windows Receiver - Standalone .EXE Builder (v0.7.5)
 echo ===============================================================================
 echo.
 
@@ -43,7 +43,7 @@ if exist "%~dp0dist" rd /s /q "%~dp0dist"
 
 :: 4. Build single-file EXE using PyInstaller spec file
 echo [*] Compiling PhoneMicReceiver.exe with PyInstaller...
-echo     This bundles Python, PortAudio DLLs, NumPy, and SoundDevice into one standalone .exe.
+echo     This bundles Python, Tkinter GUI, PortAudio DLLs, NumPy, and SoundDevice into one standalone .exe.
 echo.
 
 pushd "%~dp0"
@@ -70,6 +70,9 @@ if not exist "%~dp0dist\PhoneMicReceiver.exe" (
     exit /b 1
 )
 
+:: Copy helper firewall script into dist for 1-click portability
+copy /y "%~dp0fix_firewall.bat" "%~dp0dist\" >nul 2>&1
+
 color 0a
 echo.
 echo ===============================================================================
@@ -80,9 +83,11 @@ echo Location: %~dp0dist\PhoneMicReceiver.exe
 echo.
 echo Features included in your standalone .exe:
 echo   - Self-contained (Runs on any Windows 10/11 PC without needing Python installed)
-echo   - Automatic pre-flight audio check & VB-CABLE detection
-echo   - Full interactive console dashboard with real-time VU meter
-echo   - Lossless WAV recording and remote bidirectional pause sync
+echo   - Sleek Native Dark GUI with real-time VU meter and live controls
+echo   - Automatic resource pausing when minimized (0%% CPU / zero graphics rendering)
+echo   - Subnet-aware USB Tethering and Wi-Fi IP auto-detection
+echo   - Dynamic audio output switching (VB-CABLE / Speakers)
+echo   - 1-click firewall configurator included (fix_firewall.bat)
 echo.
 echo Opening output folder...
 explorer "%~dp0dist"

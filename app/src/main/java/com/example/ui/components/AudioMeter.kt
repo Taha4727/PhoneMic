@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +15,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -82,16 +86,21 @@ fun AudioMeter(
             )
         }
 
-        // Horizontal Segmented VU Peak Bar (No heavy canvas!)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically
+        // Horizontal Segmented VU Peak Bar (Hardware-accelerated single Canvas)
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
         ) {
             val totalSegments = 20
             val activeSegments = if (isRunning && !isPaused) {
                 ((audioDb + 60f) / 60f * totalSegments).toInt().coerceIn(0, totalSegments)
             } else 0
+
+            val spacingPx = 2.dp.toPx()
+            val totalSpacing = spacingPx * (totalSegments - 1)
+            val segmentWidth = (size.width - totalSpacing) / totalSegments
+            val cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx())
 
             for (index in 0 until totalSegments) {
                 val isActive = index < activeSegments
@@ -100,15 +109,12 @@ fun AudioMeter(
                     index >= 13 -> StreamWarningAmber
                     else -> StreamActiveGreen
                 }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(6.dp)
-                        .background(
-                            color = if (isActive) segmentColor else Color(0xFF192331),
-                            shape = RoundedCornerShape(1.dp)
-                        )
+                val x = index * (segmentWidth + spacingPx)
+                drawRoundRect(
+                    color = if (isActive) segmentColor else Color(0xFF192331),
+                    topLeft = Offset(x, 0f),
+                    size = Size(segmentWidth, size.height),
+                    cornerRadius = cornerRadius
                 )
             }
         }
