@@ -28,10 +28,12 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Arrays
+import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.abs
 import kotlin.math.log10
@@ -217,23 +219,33 @@ class PhoneMicService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundCompat(createNotification(stateMessage))
-
         if (intent == null) {
             return START_NOT_STICKY
         }
 
         val action = intent.action
+        if (ACTION_STOP == action) {
+            requestStop()
+            return START_NOT_STICKY
+        }
+
         if (ACTION_START == action) {
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                failStart("Microphone permission required")
+                return START_NOT_STICKY
+            }
+
+            startForegroundCompat(createNotification(stateMessage))
+
             val ip = intent.getStringExtra(EXTRA_IP)?.trim() ?: ""
             val port = intent.getIntExtra(EXTRA_PORT, 5001)
             val transport = intent.getStringExtra(EXTRA_TRANSPORT) ?: TRANSPORT_UDP
             val connection = intent.getStringExtra(EXTRA_CONNECTION) ?: CONNECTION_WIFI
-            val mic = intent.getStringExtra(EXTRA_MIC) ?: MIC_RAW
+            val mic = intent.getStringExtra(EXTRA_MIC) ?: MIC_STANDARD
             gain = intent.getFloatExtra(EXTRA_GAIN, 1.0f).coerceIn(0.5f, 4.0f)
             startStreaming(ip, port, transport, connection, mic)
-        } else if (ACTION_STOP == action) {
-            requestStop()
         }
 
         return START_NOT_STICKY
@@ -568,7 +580,7 @@ class PhoneMicService : Service() {
             // Remote control listener thread for incoming commands from Windows Receiver
             val ctrlThread = Thread({
                 val cmdBuf = ByteArray(4)
-                while (running && myGeneration == generation) {
+                while (running && !stopRequested && !socket.isClosed && myGeneration == generation) {
                     try {
                         val readBytes = input.read(cmdBuf)
                         if (readBytes == 4) {
@@ -581,6 +593,8 @@ class PhoneMicService : Service() {
                         } else if (readBytes < 0) {
                             break
                         }
+                    } catch (_: SocketException) {
+                        break
                     } catch (_: Exception) {
                         break
                     }
@@ -596,9 +610,17 @@ class PhoneMicService : Service() {
             var windowStart = SystemClock.uptimeMillis()
             var consecutiveSilence = 0
 
-            while (running) {
+            while (running && !stopRequested && !socket.isClosed && myGeneration == generation) {
                 if (paused) {
-                    out.write(silence)
+                    if (socket.isClosed || stopRequested || !running) break
+                    try {
+                        out.write(silence)
+                    } catch (se: SocketException) {
+                        if (stopRequested || !running || socket.isClosed || myGeneration != generation) {
+                            break
+                        }
+                        throw se
+                    }
                     totalPacketsSent++
                     totalBytesSent += silence.size
                     reportAudioLevel(0f, -60f)
@@ -646,7 +668,15 @@ class PhoneMicService : Service() {
                         consecutiveSilence = 0
                     }
 
-                    out.write(data, 0, read)
+                    if (socket.isClosed || stopRequested || !running) break
+                    try {
+                        out.write(data, 0, read)
+                    } catch (se: SocketException) {
+                        if (stopRequested || !running || socket.isClosed || myGeneration != generation) {
+                            break
+                        }
+                        throw se
+                    }
                     totalPacketsSent++
                     totalBytesSent += read
                     packetsInWindow++
@@ -660,6 +690,7 @@ class PhoneMicService : Service() {
                         windowStart = now
                     }
                 } else if (read < 0) {
+                    if (stopRequested || !running || myGeneration != generation) break
                     throw IOException("AudioRecord error $read")
                 } else {
                     sleepPacketMs()
@@ -704,7 +735,7 @@ class PhoneMicService : Service() {
             val ctrlThread = Thread({
                 val cmdBuf = ByteArray(64)
                 val cmdPacket = DatagramPacket(cmdBuf, cmdBuf.size)
-                while (running && myGeneration == generation) {
+                while (running && !stopRequested && !socket.isClosed && myGeneration == generation) {
                     try {
                         socket.receive(cmdPacket)
                         if (cmdPacket.length >= 4) {
@@ -717,8 +748,10 @@ class PhoneMicService : Service() {
                         }
                     } catch (_: SocketTimeoutException) {
                         // Expected: continue looping without locking socket
+                    } catch (_: SocketException) {
+                        break
                     } catch (_: Exception) {
-                        if (!running || myGeneration != generation) break
+                        if (!running || stopRequested || socket.isClosed || myGeneration != generation) break
                     }
                 }
             }, "PhoneMic-UdpControl")
@@ -737,11 +770,19 @@ class PhoneMicService : Service() {
             // Pre-create DatagramPacket for high performance and zero GC pauses on Android 7.1.1
             val udpPacket = DatagramPacket(packet, packet.size, address, port)
 
-            while (running) {
+            while (running && !stopRequested && !socket.isClosed && myGeneration == generation) {
                 if (paused) {
                     writeHeader(packet, sequence++)
                     System.arraycopy(silence, 0, packet, 8, silence.size)
-                    socket.send(udpPacket)
+                    if (socket.isClosed || stopRequested || !running) break
+                    try {
+                        socket.send(udpPacket)
+                    } catch (se: SocketException) {
+                        if (stopRequested || !running || socket.isClosed || myGeneration != generation) {
+                            break
+                        }
+                        throw se
+                    }
                     totalPacketsSent++
                     totalBytesSent += packet.size
                     reportAudioLevel(0f, -60f)
@@ -765,6 +806,7 @@ class PhoneMicService : Service() {
                 }
 
                 if (read < 0) {
+                    if (stopRequested || !running || myGeneration != generation) break
                     throw IOException("AudioRecord error $read")
                 }
                 if (read == 0) {
@@ -801,7 +843,17 @@ class PhoneMicService : Service() {
                 if (read < PACKET_SIZE) {
                     Arrays.fill(packet, 8 + read, packet.size, 0.toByte())
                 }
-                socket.send(udpPacket)
+                if (socket.isClosed || stopRequested || !running) {
+                    break
+                }
+                try {
+                    socket.send(udpPacket)
+                } catch (se: SocketException) {
+                    if (stopRequested || !running || socket.isClosed || myGeneration != generation) {
+                        break
+                    }
+                    throw se
+                }
                 totalPacketsSent++
                 totalBytesSent += packet.size
                 packetsInWindow++
@@ -819,15 +871,38 @@ class PhoneMicService : Service() {
             handleStreamError(e, myGeneration)
         } finally {
             udpSocket = null
-            socket?.close()
+            try {
+                socket?.close()
+            } catch (_: Exception) {}
         }
     }
 
     private fun handleStreamError(e: Exception, myGeneration: Int) {
-        Log.e(TAG, "Stream error", e)
-        if (stopRequested || !running || myGeneration != generation) {
+        val msg = e.message?.lowercase(Locale.ROOT) ?: ""
+        val isSocketClosed = e is SocketException && (
+            msg.contains("closed") ||
+            msg.contains("interrupted") ||
+            msg.contains("pipe") ||
+            msg.contains("reset")
+        )
+        val isInterrupted = e is InterruptedException || Thread.currentThread().isInterrupted
+
+        // Clean termination during stop or shutdown should not be logged as a stream error
+        if (stopRequested || !running || myGeneration != generation || isInterrupted) {
+            Log.d(TAG, "Stream ended gracefully: ${e.javaClass.simpleName} ($msg)")
             return
         }
+
+        // If socket was closed/reset by peer or network drop while stream was active
+        if (isSocketClosed) {
+            Log.i(TAG, "Stream socket closed: $msg")
+            stateMessage = "Disconnected"
+            sendState()
+            updateNotification(stateMessage)
+            return
+        }
+
+        Log.e(TAG, "Stream error", e)
         val detail = e.message
         stateMessage = "Connection failed" + if (detail != null) ": $detail" else ""
         sendState()
@@ -959,7 +1034,12 @@ class PhoneMicService : Service() {
 
     private fun startForegroundCompat(notification: Notification) {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val hasMic = ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && hasMic) {
                 startForeground(
                     NOTIFICATION_ID,
                     notification,

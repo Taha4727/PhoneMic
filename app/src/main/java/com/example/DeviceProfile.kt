@@ -14,6 +14,17 @@ import android.provider.Settings
  */
 object DeviceProfile {
 
+    val isPocoF6: Boolean by lazy {
+        val model = Build.MODEL.uppercase()
+        val product = Build.PRODUCT.uppercase()
+        val device = Build.DEVICE.uppercase()
+        val brand = Build.BRAND.uppercase()
+
+        (brand.contains("POCO") || brand.contains("XIAOMI")) &&
+                (model.contains("POCO F6") || model.contains("24069PC21") ||
+                 product.contains("PERIDOT") || device.contains("PERIDOT"))
+    }
+
     val isPocoX6Pro: Boolean by lazy {
         val model = Build.MODEL.uppercase()
         val product = Build.PRODUCT.uppercase()
@@ -61,6 +72,7 @@ object DeviceProfile {
 
     val deviceDisplayName: String by lazy {
         when {
+            isPocoF6 -> "POCO F6 5G"
             isPocoX6Pro -> "POCO X6 Pro 5G"
             isGalaxyJ5 -> "Samsung Galaxy J5"
             isGalaxyA10s -> "Samsung Galaxy A10s"
@@ -73,6 +85,7 @@ object DeviceProfile {
 
     val chipsetDisplayName: String by lazy {
         when {
+            isPocoF6 -> "Qualcomm Snapdragon 8s Gen 3 (Wi-Fi 7 / 5G)"
             isPocoX6Pro -> "MediaTek Dimensity 8300-Ultra (Wi-Fi 6 / 5G)"
             isGalaxyA10s -> "MediaTek Helio P22 (Octa-Core)"
             isGalaxyJ5 -> "Qualcomm Snapdragon 410 / Exynos 7570"

@@ -1,4 +1,4 @@
-# PhoneMic Windows Receiver v0.7.5 (Studio DSP & Modern UI Native Engine)
+# PhoneMic Windows Receiver v0.8.0 (Studio DSP, Voice Changer & Modern UI)
 
 Turn your Android phone into a studio-grade, ultra-low latency PC microphone over **Wi-Fi** or **USB Tethering**.
 
@@ -9,31 +9,49 @@ Tested and optimized for:
 
 ---
 
-### 🌟 What's New in v0.7.5 (Studio DSP & UI Redesign)
-1. **Redesigned Modern Obsidian UI**:
-   - Elevated obsidian card aesthetic (`#0d1117` background, `#161b22` cards, `#30363d` borders) inspired by modern DAWs and Windows 11 Fluent 2.
-   - Segmented pill tab bar navigation (`📊 Studio Dashboard`, `🎛️ Audio FX & Equalizer`, `🌐 Network & Routing`).
-   - 32-Band neon spectrum visualizer with ballistic peak-hold gravity and oscilloscope wave mode.
-   - Stereo VU meter with calibrated dB indicators (-40 to 0 dB) and peak hold.
-   - 4-tile telemetry grid displaying protocol, client medium, jitter, bitrate, packets, loss, and uptime.
-2. **Studio-Grade WOLA Noise Suppression (No Artifacts, No Buzz)**:
-   - Fixed the previous block-FFT windowing issue that caused 100Hz buzz and musical chirping noise.
-   - Now uses 50% Weighted Overlap-Add (WOLA) with Princen-Bradley sine windowing, time-smoothed and frequency-smoothed Wiener gain masking, and 80Hz Butterworth 2nd-order subsonic rumble cut.
-   - 100% bit-exact transparent when bypassed; clean, natural voice preservation when active.
-3. **Artifact-Free Voice Harmonizer Pitch Shifter**:
-   - Replaced naive block resampling with a continuous Dual-Tap Rotating Harmonizer using raised-cosine crossfading ($w_1 + w_2 = 1.0$ everywhere).
-   - Zero clicks, zero discontinuities, and smooth continuous pitch shifting from -12.0st to +12.0st.
-   - One-click presets: `Natural (0st)`, `Deep Voice (-3st)`, `Announcer (-1.5st)`, `Crisp (+1.5st)`, `Helium (+5st)`.
-4. **Real 3-Band Parametric Studio Equalizer**:
-   - Implemented real Robert Bristow-Johnson (RBJ) Biquad IIR filters in Direct Form II Transposed with continuous state retention.
-   - Low Shelf (Warmth @ 120Hz, ±12dB), Mid Peaking (Clarity/Presence @ 2500Hz, ±12dB), High Shelf (Air/Sparkle @ 8000Hz, ±12dB).
-   - Instant studio presets: `Flat`, `Warmth`, `Crisp`, `De-Boom`.
-5. **Anti-Click Studio Noise Gate & Headphone Monitor**:
-   - Exponential attack/release envelope eliminates keyboard clicks and breathing between phrases.
-   - Independent headphone monitoring volume slider and output routing.
-6. **Silent Background Execution**:
-   - All network scans and firewall configurations run asynchronously with `CREATE_NO_WINDOW`, preventing command window flashes or UI freezing.
-   - Suspends canvas animations when minimized (`<Unmap>`) for 0% background CPU usage.
+### 🌟 What's New in v0.8.0
+
+1. **Persistent Settings & Auto-Save**:
+   - Automatically saves and restores all user adjustments: slider values, active presets, audio devices, visualizer mode, and toggles.
+   - Settings persist across sessions in `phonemic_config.json`.
+
+2. **Dedicated, Isolated "Voice Changer" Section**:
+   - Completely separated into its own top-level tab (`🎭 Voice Changer`) and modular DSP engine.
+   - 100% isolated from networking framing, socket threads, jitter buffers, and device output streams. When bypassed, audio passes through untouched with zero risk and zero CPU overhead.
+   - **8 Transformation Modes**:
+     * `Natural Pitch`: Clean, transparent pitch shifting without distortion.
+     * `Deep Titan / Monster`: Low, authoritative sub-harmonic rumble.
+     * `Helium / Chipmunk`: High-pitched formant cartoon voice.
+     * `Robot / Cybernetic`: Sci-Fi metallic ring modulation.
+     * `Walkie-Talkie / Comm Radio`: Military two-way radio comms with authentic crunch.
+     * `Echo / Stadium Delay`: Slapback stadium announcement echo.
+     * `Demon / Dark Lord`: Deep guttural transformation with dark growl.
+     * `Alien / Vibrato`: Undulating extraterrestrial pitch modulation.
+   - **Built-in Voice Presets & User Custom Presets**:
+     * Built-in presets: `Normal (Bypass)`, `Deep Titan`, `Announcer / Radio Host`, `Helium / Chipmunk`, `Robot / Cybernetic`, `Walkie-Talkie`, `Demon / Dark Lord`, `Echo / Stadium Announcer`, `Alien / Vibrato`.
+     * `+ Save Voice Preset...`: Create and name your own custom voice presets!
+     * `🗑 Delete`: Delete custom voice presets with one click.
+   - **Fine Pitch Shift & Dry/Wet Blend**:
+     * -12.0 to +12.0 semitones with dynamic musical interval readout.
+     * Dry/Wet mix slider (0% to 100%).
+
+3. **Studio Sound Presets & User Custom Presets (Audio FX & EQ)**:
+   - Dedicated Studio Presets: `Default (Studio Clean)`, `Broadcast Warmth`, `Crisp & Articulate`, `Podcast & Streamer`, `De-Boom (Bass Cut)`, `Heavy Noise Cut (Keyboard)`, `Pure Raw (Zero FX)`.
+   - `+ Save Preset...`: Save your own custom noise suppression and EQ configurations.
+   - `🗑 Delete`: Remove user presets when no longer needed.
+
+4. **Studio-Grade WOLA Noise Suppression (No Artifacts, No Buzz)**:
+   - 50% Weighted Overlap-Add (WOLA) with Princen-Bradley sine windowing, Wiener gain masking, and 80Hz Butterworth rumble cut.
+   - Artifact-free and zero buzzing.
+
+5. **Real 3-Band Parametric Studio Equalizer**:
+   - Robert Bristow-Johnson (RBJ) Biquad IIR filters in Direct Form II Transposed with continuous state retention.
+   - Low Shelf (Warmth @ 120Hz), Mid Peaking (Clarity @ 2500Hz), High Shelf (Air @ 8000Hz).
+
+6. **Redesigned Modern Obsidian UI**:
+   - 4-tab segmented pill navigation: `📊 Studio Dashboard`, `🎛️ Audio FX & Equalizer`, `🎭 Voice Changer`, `🌐 Network & Devices`.
+   - 32-Band neon spectrum visualizer with ballistic peak hold & oscilloscope mode.
+   - Full telemetry tiles: protocol, client medium, jitter, bitrate, packets, loss, and uptime.
 
 ---
 

@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -44,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,12 +58,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.DeviceProfile
 import com.example.PhoneMicViewModel
 import com.example.ui.components.BatteryOptimizationBanner
 import com.example.ui.components.GainBoostControl
 import com.example.ui.components.HeroMicControl
+import com.example.ui.components.MicrophonePermissionBanner
 import com.example.ui.components.NetworkConfigSection
 import com.example.ui.components.ReceiverGuideDialog
+import com.example.ui.components.ScreenAwakeControl
 import com.example.ui.components.StreamTelemetryCard
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.StreamActiveGreen
@@ -84,14 +89,17 @@ fun PhoneMicScreen(
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
 
-    // Compatibility check for Android 7.1.1 (API 25) and Android 10 (API 29)
-    val permissionsLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val recordAudioGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
-        if (recordAudioGranted) {
+    var showMicPermissionRationaleDialog by remember { mutableStateOf(false) }
+
+    // Dedicated Microphone Permission Launcher (Avoids multi-permission bundling issues on Xiaomi HyperOS)
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        viewModel.checkPermissions(context)
+        if (isGranted) {
             viewModel.startStreaming(context)
         } else {
+            showMicPermissionRationaleDialog = true
             Toast.makeText(
                 context,
                 "Microphone permission is required to stream audio to PC",
@@ -100,30 +108,38 @@ fun PhoneMicScreen(
         }
     }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        viewModel.checkPermissions(context)
+    }
+
     fun handleStartStream() {
         val hasMicPermission = ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
 
-        val hasNotificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(
+        if (!hasMicPermission) {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+
+        // On Android 13+ (API 33+), check notification permission non-blockingly so it doesn't prevent audio streaming
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hasNotificationPermission = ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
-        } else true
 
-        val permissionsToRequest = mutableListOf<String>()
-        if (!hasMicPermission) permissionsToRequest.add(Manifest.permission.RECORD_AUDIO)
-        if (!hasNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+            if (!hasNotificationPermission) {
+                try {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } catch (_: Exception) {}
+            }
         }
 
-        if (permissionsToRequest.isNotEmpty()) {
-            permissionsLauncher.launch(permissionsToRequest.toTypedArray())
-        } else {
-            viewModel.startStreaming(context)
-        }
+        viewModel.startStreaming(context)
     }
 
     Scaffold(
@@ -351,6 +367,14 @@ fun PhoneMicScreen(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 
+                    // Microphone Permission Banner (Visible if mic permission is not granted)
+                    MicrophonePermissionBanner(
+                        hasPermission = uiState.hasMicPermission,
+                        onRequestPermission = {
+                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    )
+
                     // Battery Optimization Banner (Only visible if not exempted)
                     BatteryOptimizationBanner(
                         isIgnored = uiState.isIgnoringBatteryOptimizations,
@@ -378,6 +402,12 @@ fun PhoneMicScreen(
                                 onStartClick = { handleStartStream() },
                                 onPauseClick = { viewModel.togglePause() },
                                 onStopClick = { viewModel.stopStreaming(context) }
+                            )
+
+                            // 2. Keep Screen Awake Control (Prevent display sleep)
+                            ScreenAwakeControl(
+                                keepAwake = uiState.keepScreenAwake,
+                                onKeepAwakeChange = { viewModel.setKeepScreenAwake(it) }
                             )
 
                             // 3. TARGET PC RECEIVER (IP, Port, Auto-Detect PC, Wi-Fi vs USB toggle, Direct USB tethering button)
@@ -450,6 +480,64 @@ fun PhoneMicScreen(
     if (uiState.showGuideDialog) {
         ReceiverGuideDialog(
             onDismissRequest = { viewModel.setGuideDialogVisible(false) }
+        )
+    }
+
+    if (showMicPermissionRationaleDialog) {
+        AlertDialog(
+            onDismissRequest = { showMicPermissionRationaleDialog = false },
+            title = {
+                Text(
+                    text = "Microphone Access Required",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "PhoneMic needs microphone permission to capture your voice and stream it in real time to your PC.",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Text(
+                        text = if (DeviceProfile.isXiaomiOrPoco) {
+                            "On Xiaomi HyperOS / POCO F6:\n1. Tap 'Open Settings' below.\n2. Tap 'Permissions' → 'Microphone'.\n3. Select 'Allow only while using the app'.\n4. Turn off 'Pause app activity if unused' to prevent HyperOS from revoking it."
+                        } else {
+                            "Please grant microphone access in system settings to use PhoneMic."
+                        },
+                        color = NeonCyan,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = 15.sp
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showMicPermissionRationaleDialog = false
+                        DeviceProfile.openAppDetailsSettings(context)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NeonCyan,
+                        contentColor = Color(0xFF003038)
+                    )
+                ) {
+                    Text("Open Settings", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showMicPermissionRationaleDialog = false }
+                ) {
+                    Text("Dismiss", color = TextSecondary)
+                }
+            },
+            containerColor = Color(0xFF141F2E),
+            shape = RoundedCornerShape(14.dp)
         )
     }
 }

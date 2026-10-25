@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.SharedPreferences
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -42,6 +44,9 @@ data class PhoneMicUiState(
     val scanFeedback: String? = null,
     val showGuideDialog: Boolean = false,
     val isIgnoringBatteryOptimizations: Boolean = true,
+    val hasMicPermission: Boolean = false,
+    val hasNotificationPermission: Boolean = false,
+    val keepScreenAwake: Boolean = true,
     // Stream telemetry matched with Windows Receiver v0.6.5
     val packetsSent: Long = 0L,
     val bytesSent: Long = 0L,
@@ -62,6 +67,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         private const val PREF_CONNECTION = "connection"
         private const val PREF_MIC = "mic"
         private const val PREF_GAIN = "gain"
+        private const val PREF_KEEP_SCREEN_AWAKE = "keep_screen_awake"
 
         private val IPV4_PATTERN = Pattern.compile(
             "^((25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\.){3}(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)$"
@@ -133,6 +139,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     init {
         // Defer service binding to Activity.onStart to prevent cold launch freeze
         checkBatteryOptimization()
+        checkPermissions()
     }
 
     private fun loadInitialState(): PhoneMicUiState {
@@ -144,6 +151,19 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         val savedConnection = prefs.getString(PREF_CONNECTION, PhoneMicService.CONNECTION_WIFI) ?: PhoneMicService.CONNECTION_WIFI
         val savedMic = prefs.getString(PREF_MIC, PhoneMicService.MIC_STANDARD) ?: PhoneMicService.MIC_STANDARD
         val savedGain = prefs.getFloat(PREF_GAIN, 1.0f)
+        val savedKeepScreenAwake = prefs.getBoolean(PREF_KEEP_SCREEN_AWAKE, true)
+
+        val app = getApplication<Application>()
+        val hasMic = ContextCompat.checkSelfPermission(
+            app,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        val hasNotif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                app,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else true
 
         val activeIp = if (savedConnection == PhoneMicService.CONNECTION_USB) savedUsbIp else savedWifiIp
 
@@ -155,7 +175,10 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             connectionMode = savedConnection,
             transportMode = savedTransport,
             micMode = savedMic,
-            gain = savedGain
+            gain = savedGain,
+            keepScreenAwake = savedKeepScreenAwake,
+            hasMicPermission = hasMic,
+            hasNotificationPermission = hasNotif
         )
     }
 
@@ -228,6 +251,32 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(gain = newGain) }
         phoneMicService?.setGain(newGain)
         savePreferences()
+    }
+
+    fun setKeepScreenAwake(awake: Boolean) {
+        _uiState.update { it.copy(keepScreenAwake = awake) }
+        savePreferences()
+    }
+
+    fun checkPermissions(context: Context = getApplication()) {
+        val hasMic = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val hasNotif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else true
+
+        _uiState.update {
+            it.copy(
+                hasMicPermission = hasMic,
+                hasNotificationPermission = hasNotif
+            )
+        }
     }
 
     fun setGuideDialogVisible(visible: Boolean) {
@@ -389,6 +438,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             .putString(PREF_CONNECTION, state.connectionMode)
             .putString(PREF_MIC, state.micMode)
             .putFloat(PREF_GAIN, state.gain)
+            .putBoolean(PREF_KEEP_SCREEN_AWAKE, state.keepScreenAwake)
             .apply()
     }
 

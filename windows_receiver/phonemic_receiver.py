@@ -1421,6 +1421,16 @@ class AudioProcessor:
             self.monitor_volume = float(d["monitor_volume"])
         self.active_preset = name
 
+    @property
+    def pitch_shift_semitones(self):
+        return self.voice_changer.pitch_semitones
+
+    @pitch_shift_semitones.setter
+    def pitch_shift_semitones(self, val):
+        self.voice_changer.pitch_semitones = float(val)
+        if abs(float(val)) > 0.15:
+            self.voice_changer.enabled = True
+
     def update_eq(self, low_db=None, mid_db=None, high_db=None):
         """Updates 3-Band EQ Biquad coefficients."""
         if low_db is not None:
@@ -1572,8 +1582,9 @@ class AudioProcessor:
 # MAIN RECEIVER ENGINE
 # ==============================================================================
 class PhoneMicReceiver:
-    def __init__(self, port=DEFAULT_PORT, target_device=None, monitor_device=None):
+    def __init__(self, port=DEFAULT_PORT, target_device=None, monitor_device=None, config=None):
         self.port = port
+        self.config = config or ConfigManager()
         self.target_device_idx = target_device
         self.monitor_device_idx = monitor_device
 
@@ -1582,7 +1593,7 @@ class PhoneMicReceiver:
         self.monitoring = False
         self.recording = False
 
-        self.processor = AudioProcessor()
+        self.processor = AudioProcessor(config=self.config)
         self.audio_queue = queue.Queue(maxsize=16)
 
         # Telemetry & Metrics
@@ -2042,6 +2053,74 @@ class PhoneMicReceiver:
 
 
 # ==============================================================================
+# SLEEK MODAL DIALOG FOR PRESET CREATION
+# ==============================================================================
+_BaseToplevel = tk.Toplevel if TKINTER_AVAILABLE else object
+
+
+class PromptDialog(_BaseToplevel):
+    def __init__(self, parent, title, prompt, default_text=""):
+        super().__init__(parent)
+        self.result = None
+        self.title(title)
+        self.configure(bg="#161b22")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.geometry("380x165")
+        try:
+            parent.update_idletasks()
+            x = parent.winfo_rootx() + (parent.winfo_width() // 2) - 190
+            y = parent.winfo_rooty() + (parent.winfo_height() // 2) - 82
+            self.geometry(f"+{max(50, x)}+{max(50, y)}")
+        except Exception:
+            pass
+
+        tk.Label(
+            self, text=prompt, font=("Segoe UI", 9, "bold"),
+            fg="#f0f6fc", bg="#161b22"
+        ).pack(anchor="w", padx=20, pady=(18, 6))
+
+        self.entry = tk.Entry(
+            self, font=("Segoe UI", 10), bg="#21262d", fg="#f0f6fc",
+            insertbackground="#ffffff", highlightthickness=1,
+            highlightbackground="#30363d", relief="flat"
+        )
+        self.entry.pack(fill="x", padx=20, pady=(0, 16))
+        self.entry.insert(0, default_text)
+        self.entry.select_range(0, tk.END)
+        self.entry.focus_set()
+
+        btn_box = tk.Frame(self, bg="#161b22")
+        btn_box.pack(fill="x", padx=20, pady=(0, 14))
+
+        save_btn = tk.Button(
+            btn_box, text="Save Preset", font=("Segoe UI", 9, "bold"),
+            fg="#ffffff", bg="#0284c7", activebackground="#0369a1",
+            relief="flat", padx=14, pady=5, cursor="hand2", command=self.on_save
+        )
+        save_btn.pack(side="right", padx=(8, 0))
+
+        cancel_btn = tk.Button(
+            btn_box, text="Cancel", font=("Segoe UI", 9),
+            fg="#8b949e", bg="#21262d", activebackground="#30363d",
+            relief="flat", padx=12, pady=5, cursor="hand2", command=self.destroy
+        )
+        cancel_btn.pack(side="right")
+
+        self.bind("<Return>", lambda e: self.on_save())
+        self.bind("<Escape>", lambda e: self.destroy())
+        parent.wait_window(self)
+
+    def on_save(self):
+        val = self.entry.get().strip()
+        if val:
+            self.result = val
+        self.destroy()
+
+
+# ==============================================================================
 # REDESIGNED MODERN OBSIDIAN GUI (V0.7.5 STUDIO EDITION)
 # ==============================================================================
 class PhoneMicGui:
@@ -2051,24 +2130,29 @@ class PhoneMicGui:
     - Real-Time Protocol & Telemetry Dashboard (UDP/TCP, Jitter, Loss, Bitrate)
     - Studio Audio FX:
         * Smart WOLA Spectral Noise Canceler with 80Hz Rumble High-Pass Cut
-        * Real 3-Band Parametric Equalizer (Warmth, Clarity, Air) + 5 Quick Presets
-        * Artifact-Free Rotating Dual-Tap Voice Pitch Shifter + 5 Presets
+        * Real 3-Band Parametric Equalizer (Warmth, Clarity, Air) + Quick Presets
         * Anti-Click Studio Noise Gate
         * Independent Headphone Monitor Volume
+    - Dedicated Isolated Voice Changer:
+        * 8 Fun & Authentic Voice Models (Deep Titan, Robot, Chipmunk, Walkie-Talkie, Demon, etc.)
+        * Smooth Dual-Tap Pitch Shifter with Musical Interval Guides
+        * Dry / Wet Blend Control
+        * Custom User Presets Storage
     - Network & Device Endpoints (Wi-Fi, USB Tether, Virtual Cable Guide)
     - 0% Background CPU when minimized (<Unmap>)
     """
-    def __init__(self, root, receiver):
+    def __init__(self, root, receiver, config=None):
         self.root = root
         self.receiver = receiver
+        self.config = config or getattr(receiver, 'config', None) or ConfigManager()
         self.is_visible = True
         self.anim_timer = None
         self.active_tab = "dashboard"
-        self.visualizer_mode = "spectrum"
+        self.visualizer_mode = self.config.data.get("visualizer_mode", "spectrum")
 
         self.root.title(f"PhoneMic Studio Receiver v{VERSION}")
-        self.root.geometry("680x760")
-        self.root.minsize(620, 680)
+        self.root.geometry("690x780")
+        self.root.minsize(630, 700)
 
         # Deep Obsidian & Modern Studio Palette
         self.C_BG = "#0d1117"               # Obsidian Canvas
@@ -2163,13 +2247,14 @@ class PhoneMicGui:
         tabs = [
             ("dashboard", "📊 Studio Dashboard"),
             ("fx_studio", "🎛️ Audio FX & Equalizer"),
-            ("network", "🌐 Network & Routing"),
+            ("voice_changer", "🎭 Voice Changer"),
+            ("network", "🌐 Network & Devices"),
         ]
 
         for key, label in tabs:
             btn = tk.Button(
                 nav_wrapper, text=label, font=("Segoe UI", 9, "bold"),
-                relief="flat", padx=14, pady=5, bd=0, cursor="hand2",
+                relief="flat", padx=10, pady=5, bd=0, cursor="hand2",
                 command=lambda k=key: self.switch_tab(k)
             )
             btn.pack(side="left", expand=True, fill="x", padx=2)
@@ -2182,6 +2267,7 @@ class PhoneMicGui:
         self.pages = {}
         self._build_dashboard_page()
         self._build_fx_studio_page()
+        self._build_voice_changer_page()
         self._build_network_page()
 
         self.switch_tab("dashboard")
@@ -2228,15 +2314,19 @@ class PhoneMicGui:
         )
         self.notice_lbl.pack(fill="x", pady=(6, 0))
 
-        # Initial scans
+        # Initial scans and config restore
         self._refresh_network_ips_async()
         self._populate_audio_devices()
+        self._restore_ui_from_config()
 
     def switch_tab(self, tab_key):
         self.active_tab = tab_key
         for k, btn in self.tab_btns.items():
             if k == tab_key:
-                btn.config(bg=self.C_PRIMARY, fg="#04111d")
+                if k == "voice_changer":
+                    btn.config(bg=self.C_PURPLE, fg="#ffffff")
+                else:
+                    btn.config(bg=self.C_PRIMARY, fg="#04111d")
             else:
                 btn.config(bg=self.C_SURFACE_ALT, fg=self.C_TEXT_SEC)
 
@@ -2388,9 +2478,73 @@ class PhoneMicGui:
         page = tk.Frame(self.page_container, bg=self.C_BG)
         self.pages["fx_studio"] = page
 
-        # 1. SMART NOISE SUPPRESSION (WOLA SINE-WINDOW WIENER + RUMBLE CUT)
+        # 1. STUDIO FX PRESETS BAR
+        preset_card = tk.Frame(page, bg=self.C_SURFACE, padx=14, pady=10, highlightthickness=1, highlightbackground=self.C_BORDER)
+        preset_card.pack(fill="x", pady=(0, 6))
+
+        p_top = tk.Frame(preset_card, bg=self.C_SURFACE)
+        p_top.pack(fill="x")
+
+        tk.Label(
+            p_top, text="STUDIO SOUND PRESETS", font=("Segoe UI", 9, "bold"),
+            fg=self.C_PRIMARY, bg=self.C_SURFACE
+        ).pack(side="left")
+
+        # Save & Delete Buttons on Right
+        p_btns = tk.Frame(p_top, bg=self.C_SURFACE)
+        p_btns.pack(side="right")
+
+        self.fx_save_btn = tk.Button(
+            p_btns, text="+ Save Preset...", font=("Segoe UI", 8, "bold"),
+            fg="#ffffff", bg="#0284c7", activebackground="#0369a1",
+            relief="flat", padx=8, pady=2, cursor="hand2", command=self.on_save_fx_preset
+        )
+        self.fx_save_btn.pack(side="left", padx=2)
+
+        self.fx_del_btn = tk.Button(
+            p_btns, text="🗑 Delete", font=("Segoe UI", 8),
+            fg="#ef4444", bg=self.C_SURFACE_ALT, activebackground="#374151",
+            relief="flat", padx=8, pady=2, cursor="hand2", state="disabled",
+            command=self.on_delete_fx_preset
+        )
+        self.fx_del_btn.pack(side="left", padx=2)
+
+        # Preset Combobox row
+        p_row = tk.Frame(preset_card, bg=self.C_SURFACE)
+        p_row.pack(fill="x", pady=(6, 4))
+
+        tk.Label(
+            p_row, text="Active Preset:", font=("Segoe UI", 8),
+            fg=self.C_TEXT_SEC, bg=self.C_SURFACE, width=14, anchor="w"
+        ).pack(side="left")
+
+        self.fx_preset_combo = ttk.Combobox(p_row, state="readonly", font=("Segoe UI", 9), width=28)
+        self.fx_preset_combo.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self.fx_preset_combo.bind("<<ComboboxSelected>>", self.on_fx_preset_selected)
+
+        # Quick Preset Chips
+        fx_chips = tk.Frame(preset_card, bg=self.C_SURFACE)
+        fx_chips.pack(fill="x", pady=(4, 0))
+
+        quick_presets = [
+            ("Studio Clean", "Default (Studio Clean)"),
+            ("Broadcast Warmth", "Broadcast Warmth"),
+            ("Crisp Vocal", "Crisp & Articulate"),
+            ("Podcast Host", "Podcast & Streamer"),
+            ("De-Boom Bass", "De-Boom (Bass Cut)"),
+            ("Pure Raw", "Pure Raw (Zero FX)")
+        ]
+        for chip_lbl, preset_key in quick_presets:
+            tk.Button(
+                fx_chips, text=chip_lbl, font=("Segoe UI", 7, "bold"),
+                fg=self.C_TEXT_PRI, bg=self.C_SURFACE_ALT, activebackground="#374151",
+                relief="flat", padx=5, pady=2, cursor="hand2",
+                command=lambda k=preset_key: self.apply_named_fx_preset(k)
+            ).pack(side="left", padx=2, fill="x", expand=True)
+
+        # 2. SMART NOISE SUPPRESSION (WOLA SINE-WINDOW WIENER + RUMBLE CUT)
         nc_card = tk.Frame(page, bg=self.C_SURFACE, padx=14, pady=10, highlightthickness=1, highlightbackground=self.C_BORDER)
-        nc_card.pack(fill="x", pady=(0, 6))
+        nc_card.pack(fill="x", pady=6)
 
         nc_top = tk.Frame(nc_card, bg=self.C_SURFACE)
         nc_top.pack(fill="x")
@@ -2431,7 +2585,7 @@ class PhoneMicGui:
         )
         self.nc_val_lbl.pack(side="right")
 
-        # 2. REAL 3-BAND STUDIO PARAMETRIC EQUALIZER
+        # 3. REAL 3-BAND STUDIO PARAMETRIC EQUALIZER
         eq_card = tk.Frame(page, bg=self.C_SURFACE, padx=14, pady=10, highlightthickness=1, highlightbackground=self.C_BORDER)
         eq_card.pack(fill="x", pady=6)
 
@@ -2447,13 +2601,13 @@ class PhoneMicGui:
         eq_presets = tk.Frame(eq_top, bg=self.C_SURFACE)
         eq_presets.pack(side="right")
 
-        presets = [
+        eq_quick = [
             ("Flat", 0.0, 0.0, 0.0),
             ("Warmth", 4.0, 1.5, 2.5),
             ("Crisp", -2.0, 3.5, 5.0),
             ("De-Boom", -5.0, 1.0, 2.0),
         ]
-        for name, l, m, h in presets:
+        for name, l, m, h in eq_quick:
             tk.Button(
                 eq_presets, text=name, font=("Segoe UI", 7, "bold"),
                 fg=self.C_TEXT_PRI, bg=self.C_SURFACE_ALT, activebackground="#374151",
@@ -2506,62 +2660,6 @@ class PhoneMicGui:
         self.eq_high_lbl = tk.Label(r_high, text="0.0 dB", font=("Consolas", 8, "bold"), fg=self.C_PRIMARY, bg=self.C_SURFACE, width=10)
         self.eq_high_lbl.pack(side="right")
 
-        # 3. ARTIFACT-FREE VOICE PITCH SHIFTER
-        pitch_card = tk.Frame(page, bg=self.C_SURFACE, padx=14, pady=10, highlightthickness=1, highlightbackground=self.C_BORDER)
-        pitch_card.pack(fill="x", pady=6)
-
-        pitch_top = tk.Frame(pitch_card, bg=self.C_SURFACE)
-        pitch_top.pack(fill="x")
-
-        tk.Label(
-            pitch_top, text="REAL-TIME VOICE HARMONIZER (PITCH SHIFTER)",
-            font=("Segoe UI", 9, "bold"), fg=self.C_PURPLE, bg=self.C_SURFACE
-        ).pack(side="left")
-
-        tk.Label(
-            pitch_top, text="Dual-Tap Rotating Delay (Zero Clicks)",
-            font=("Segoe UI", 8), fg=self.C_TEXT_MUTED, bg=self.C_SURFACE
-        ).pack(side="right")
-
-        pitch_row = tk.Frame(pitch_card, bg=self.C_SURFACE)
-        pitch_row.pack(fill="x", pady=(6, 2))
-
-        tk.Label(pitch_row, text="Pitch Shift:", font=("Segoe UI", 8), fg=self.C_TEXT_SEC, bg=self.C_SURFACE, width=14, anchor="w").pack(side="left")
-
-        self.pitch_scale = tk.Scale(
-            pitch_row, from_=-12.0, to=12.0, resolution=0.5, orient="horizontal",
-            bg=self.C_SURFACE, fg=self.C_TEXT_PRI, highlightthickness=0, bd=0,
-            troughcolor=self.C_SURFACE_ALT, activebackground=self.C_PURPLE,
-            command=self.on_pitch_changed
-        )
-        self.pitch_scale.set(0.0)
-        self.pitch_scale.pack(side="left", fill="x", expand=True, padx=6)
-
-        self.pitch_val_lbl = tk.Label(
-            pitch_row, text="0.0 st (Natural)", font=("Consolas", 8, "bold"),
-            fg=self.C_PURPLE, bg=self.C_SURFACE, width=16
-        )
-        self.pitch_val_lbl.pack(side="right")
-
-        # Pitch Preset Chips
-        pitch_chips = tk.Frame(pitch_card, bg=self.C_SURFACE)
-        pitch_chips.pack(fill="x", pady=(4, 0))
-
-        p_presets = [
-            ("Natural (0st)", 0.0),
-            ("Deep Voice (-3st)", -3.0),
-            ("Announcer (-1.5st)", -1.5),
-            ("Crisp (+1.5st)", 1.5),
-            ("Helium (+5st)", 5.0),
-        ]
-        for title, val in p_presets:
-            tk.Button(
-                pitch_chips, text=title, font=("Segoe UI", 7),
-                fg=self.C_TEXT_PRI, bg=self.C_SURFACE_ALT, activebackground="#374151",
-                relief="flat", padx=6, pady=2, cursor="hand2",
-                command=lambda v=val: self.set_pitch_preset(v)
-            ).pack(side="left", padx=2, fill="x", expand=True)
-
         # 4. STUDIO NOISE GATE & HEADPHONE MONITOR VOLUME
         sub_grid = tk.Frame(page, bg=self.C_BG)
         sub_grid.pack(fill="x", pady=6)
@@ -2608,6 +2706,345 @@ class PhoneMicGui:
         self.mon_vol_lbl = tk.Label(mon_srow, text="85%", font=("Consolas", 8, "bold"), fg=self.C_SUCCESS, bg=self.C_SURFACE, width=6)
         self.mon_vol_lbl.pack(side="right")
 
+    # ==========================================================================
+    # TAB 3: DEDICATED MODULAR VOICE CHANGER (ISOLATED ENGINE)
+    # ==========================================================================
+    def _build_voice_changer_page(self):
+        page = tk.Frame(self.page_container, bg=self.C_BG)
+        self.pages["voice_changer"] = page
+
+        # 1. MASTER BYPASS & STATUS CARD
+        top_card = tk.Frame(page, bg=self.C_SURFACE, padx=14, pady=10, highlightthickness=1, highlightbackground=self.C_BORDER)
+        top_card.pack(fill="x", pady=(0, 6))
+
+        top_row = tk.Frame(top_card, bg=self.C_SURFACE)
+        top_row.pack(fill="x")
+
+        self.vc_toggle_btn = tk.Button(
+            top_row, text="[Off] Bypassed (Pass-Through - 0 Latency)", font=("Segoe UI", 9, "bold"),
+            fg="#ffffff", bg="#374151", activebackground="#4b5563",
+            relief="flat", padx=12, pady=4, cursor="hand2", command=self.on_toggle_vc_enabled
+        )
+        self.vc_toggle_btn.pack(side="left")
+
+        tk.Label(
+            top_row, text="Dedicated Isolated Transformation Engine (Pass-through when off)",
+            font=("Segoe UI", 8), fg=self.C_TEXT_MUTED, bg=self.C_SURFACE
+        ).pack(side="left", padx=10)
+
+        # 2. VOICE CHANGER PRESETS CARD
+        preset_card = tk.Frame(page, bg=self.C_SURFACE, padx=14, pady=10, highlightthickness=1, highlightbackground=self.C_BORDER)
+        preset_card.pack(fill="x", pady=6)
+
+        p_top = tk.Frame(preset_card, bg=self.C_SURFACE)
+        p_top.pack(fill="x")
+
+        tk.Label(
+            p_top, text="VOICE CHANGER PRESETS", font=("Segoe UI", 9, "bold"),
+            fg=self.C_PURPLE, bg=self.C_SURFACE
+        ).pack(side="left")
+
+        # Save & Delete Buttons on Right
+        p_btns = tk.Frame(p_top, bg=self.C_SURFACE)
+        p_btns.pack(side="right")
+
+        self.vc_save_btn = tk.Button(
+            p_btns, text="+ Save Voice Preset...", font=("Segoe UI", 8, "bold"),
+            fg="#ffffff", bg="#7c3aed", activebackground="#6d28d9",
+            relief="flat", padx=8, pady=2, cursor="hand2", command=self.on_save_vc_preset
+        )
+        self.vc_save_btn.pack(side="left", padx=2)
+
+        self.vc_del_btn = tk.Button(
+            p_btns, text="🗑 Delete", font=("Segoe UI", 8),
+            fg="#ef4444", bg=self.C_SURFACE_ALT, activebackground="#374151",
+            relief="flat", padx=8, pady=2, cursor="hand2", state="disabled",
+            command=self.on_delete_vc_preset
+        )
+        self.vc_del_btn.pack(side="left", padx=2)
+
+        # Combobox row
+        p_row = tk.Frame(preset_card, bg=self.C_SURFACE)
+        p_row.pack(fill="x", pady=(6, 4))
+
+        tk.Label(
+            p_row, text="Active Voice:", font=("Segoe UI", 8),
+            fg=self.C_TEXT_SEC, bg=self.C_SURFACE, width=14, anchor="w"
+        ).pack(side="left")
+
+        self.vc_preset_combo = ttk.Combobox(p_row, state="readonly", font=("Segoe UI", 9), width=28)
+        self.vc_preset_combo.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self.vc_preset_combo.bind("<<ComboboxSelected>>", self.on_vc_preset_selected)
+
+        # Quick Voice Preset Chips
+        vc_chips = tk.Frame(preset_card, bg=self.C_SURFACE)
+        vc_chips.pack(fill="x", pady=(4, 0))
+
+        quick_voice = [
+            ("Normal", "Normal (Bypass)"),
+            ("Deep Titan", "Deep Titan / Monster"),
+            ("Radio Host", "Announcer / Radio Host"),
+            ("Chipmunk", "Helium / Chipmunk"),
+            ("Cyber Robot", "Robot / Cybernetic"),
+            ("Walkie-Talkie", "Walkie-Talkie / Comm Radio"),
+            ("Dark Lord", "Demon / Dark Lord"),
+            ("Stadium Echo", "Echo / Stadium Announcer"),
+            ("Alien Vibrato", "Alien / Vibrato")
+        ]
+        for chip_lbl, preset_key in quick_voice:
+            tk.Button(
+                vc_chips, text=chip_lbl, font=("Segoe UI", 7, "bold"),
+                fg=self.C_TEXT_PRI, bg=self.C_SURFACE_ALT, activebackground="#374151",
+                relief="flat", padx=4, pady=2, cursor="hand2",
+                command=lambda k=preset_key: self.apply_named_vc_preset(k)
+            ).pack(side="left", padx=1, fill="x", expand=True)
+
+        # 3. TRANSFORMATION MODE SELECTION
+        mode_card = tk.Frame(page, bg=self.C_SURFACE, padx=14, pady=10, highlightthickness=1, highlightbackground=self.C_BORDER)
+        mode_card.pack(fill="x", pady=6)
+
+        tk.Label(
+            mode_card, text="VOICE TRANSFORMATION MODE", font=("Segoe UI", 8, "bold"),
+            fg=self.C_TEXT_SEC, bg=self.C_SURFACE
+        ).pack(anchor="w")
+
+        # 2 Rows of Mode Buttons
+        self.mode_btns = {}
+        modes = VoiceChanger.MODES
+        row1_modes = modes[:4]
+        row2_modes = modes[4:]
+
+        m_row1 = tk.Frame(mode_card, bg=self.C_SURFACE)
+        m_row1.pack(fill="x", pady=(6, 2))
+        for m in row1_modes:
+            btn = tk.Button(
+                m_row1, text=m, font=("Segoe UI", 7, "bold"),
+                fg=self.C_TEXT_PRI, bg=self.C_SURFACE_ALT, activebackground="#374151",
+                relief="flat", padx=6, pady=4, cursor="hand2",
+                command=lambda mode_name=m: self.set_vc_mode(mode_name)
+            )
+            btn.pack(side="left", padx=2, fill="x", expand=True)
+            self.mode_btns[m] = btn
+
+        m_row2 = tk.Frame(mode_card, bg=self.C_SURFACE)
+        m_row2.pack(fill="x", pady=(2, 6))
+        for m in row2_modes:
+            btn = tk.Button(
+                m_row2, text=m, font=("Segoe UI", 7, "bold"),
+                fg=self.C_TEXT_PRI, bg=self.C_SURFACE_ALT, activebackground="#374151",
+                relief="flat", padx=6, pady=4, cursor="hand2",
+                command=lambda mode_name=m: self.set_vc_mode(mode_name)
+            )
+            btn.pack(side="left", padx=2, fill="x", expand=True)
+            self.mode_btns[m] = btn
+
+        # Dynamic Mode Description Box
+        self.mode_desc_lbl = tk.Label(
+            mode_card, text="Clean, natural pitch shifting without voice distortion.",
+            font=("Segoe UI", 8, "italic"), fg=self.C_PRIMARY, bg=self.C_SURFACE_ALT,
+            padx=8, pady=4, anchor="w", justify="left"
+        )
+        self.mode_desc_lbl.pack(fill="x", pady=(2, 0))
+
+        # 4. PITCH SHIFT & DRY/WET SLIDERS (IN A 2-COLUMN GRID)
+        pw_grid = tk.Frame(page, bg=self.C_BG)
+        pw_grid.pack(fill="x", pady=6)
+        pw_grid.columnconfigure(0, weight=3)
+        pw_grid.columnconfigure(1, weight=2)
+
+        # Pitch Shifter Card (Left Column)
+        pitch_card = tk.Frame(pw_grid, bg=self.C_SURFACE, padx=12, pady=10, highlightthickness=1, highlightbackground=self.C_BORDER)
+        pitch_card.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+
+        p_hdr = tk.Frame(pitch_card, bg=self.C_SURFACE)
+        p_hdr.pack(fill="x")
+        tk.Label(p_hdr, text="PITCH SHIFT (SEMITONES)", font=("Segoe UI", 8, "bold"), fg=self.C_PURPLE, bg=self.C_SURFACE).pack(side="left")
+        self.vc_pitch_val_lbl = tk.Label(p_hdr, text="0.0 st (Natural)", font=("Consolas", 8, "bold"), fg=self.C_PURPLE, bg=self.C_SURFACE)
+        self.vc_pitch_val_lbl.pack(side="right")
+
+        self.vc_pitch_scale = tk.Scale(
+            pitch_card, from_=-12.0, to=12.0, resolution=0.5, orient="horizontal",
+            bg=self.C_SURFACE, fg=self.C_TEXT_PRI, highlightthickness=0, bd=0,
+            troughcolor=self.C_SURFACE_ALT, activebackground=self.C_PURPLE,
+            command=self.on_vc_pitch_changed
+        )
+        self.vc_pitch_scale.set(0.0)
+        self.vc_pitch_scale.pack(fill="x", pady=(2, 4))
+
+        # Quick interval chips
+        p_intervals = [
+            ("-6st", -6.0),
+            ("-3st", -3.0),
+            ("-1.5st", -1.5),
+            ("0st", 0.0),
+            ("+1.5st", 1.5),
+            ("+3st", 3.0),
+            ("+6st", 6.0)
+        ]
+        p_ichips = tk.Frame(pitch_card, bg=self.C_SURFACE)
+        p_ichips.pack(fill="x")
+        for lbl, val in p_intervals:
+            tk.Button(
+                p_ichips, text=lbl, font=("Segoe UI", 7),
+                fg=self.C_TEXT_PRI, bg=self.C_SURFACE_ALT, activebackground="#374151",
+                relief="flat", padx=3, pady=1, cursor="hand2",
+                command=lambda v=val: self.set_vc_pitch_preset(v)
+            ).pack(side="left", padx=1, fill="x", expand=True)
+
+        # Dry / Wet Mix Card (Right Column)
+        mix_card = tk.Frame(pw_grid, bg=self.C_SURFACE, padx=12, pady=10, highlightthickness=1, highlightbackground=self.C_BORDER)
+        mix_card.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+
+        m_hdr = tk.Frame(mix_card, bg=self.C_SURFACE)
+        m_hdr.pack(fill="x")
+        tk.Label(m_hdr, text="DRY / WET MIX", font=("Segoe UI", 8, "bold"), fg=self.C_PRIMARY, bg=self.C_SURFACE).pack(side="left")
+        self.vc_mix_val_lbl = tk.Label(m_hdr, text="100%", font=("Consolas", 8, "bold"), fg=self.C_PRIMARY, bg=self.C_SURFACE)
+        self.vc_mix_val_lbl.pack(side="right")
+
+        self.vc_mix_scale = tk.Scale(
+            mix_card, from_=0, to=100, orient="horizontal",
+            bg=self.C_SURFACE, fg=self.C_TEXT_PRI, highlightthickness=0, bd=0,
+            troughcolor=self.C_SURFACE_ALT, activebackground=self.C_PRIMARY,
+            command=self.on_vc_mix_changed
+        )
+        self.vc_mix_scale.set(100)
+        self.vc_mix_scale.pack(fill="x", pady=(2, 4))
+
+        tk.Label(
+            mix_card, text="100% = Full effect\n50% = Blend original with effect",
+            font=("Segoe UI", 7), fg=self.C_TEXT_MUTED, bg=self.C_SURFACE, justify="left"
+        ).pack(anchor="w")
+
+        # 5. ISOLATION ARCHITECTURE SAFETY CARD
+        safety_card = tk.Frame(page, bg="#0d1520", padx=12, pady=8, highlightthickness=1, highlightbackground="#1e293b")
+        safety_card.pack(fill="x", pady=(4, 0))
+
+        tk.Label(
+            safety_card, text="🛡️ Complete Isolation Guarantee",
+            font=("Segoe UI", 8, "bold"), fg=self.C_SUCCESS, bg="#0d1520"
+        ).pack(anchor="w")
+
+        tk.Label(
+            safety_card,
+            text="The Voice Changer operates in an independent modular DSP sandbox.\n"
+                 "It does not touch UDP/TCP networking packets, jitter smoothing, or audio device outputs.\n"
+                 "Toggling or tweaking voice effects will never drop packets or disconnect audio streaming.",
+            font=("Segoe UI", 7), fg=self.C_TEXT_SEC, bg="#0d1520", justify="left"
+        ).pack(anchor="w", pady=(2, 0))
+
+    # --------------------------------------------------------------------------
+    # AUDIO FX CALLBACKS & PRESET MANAGEMENT
+    # --------------------------------------------------------------------------
+    def _save_fx_config(self):
+        p = self.receiver.processor
+        self.config.data["studio_fx"] = {
+            "active_preset": p.active_preset,
+            "gain": p.gain,
+            "smart_noise_cancel": p.smart_noise_cancel,
+            "noise_cancel_amount": p.noise_cancel_amount,
+            "gate_threshold_db": p.gate_threshold_db,
+            "eq_low_gain_db": p.eq_low_gain_db,
+            "eq_mid_gain_db": p.eq_mid_gain_db,
+            "eq_high_gain_db": p.eq_high_gain_db,
+            "monitor_volume": p.monitor_volume
+        }
+        self.config.save()
+
+    def _refresh_fx_preset_combo(self, select_name=None):
+        builtins = list(AudioProcessor.FX_BUILTIN_PRESETS.keys())
+        users = list(self.config.data.get("user_fx_presets", {}).keys())
+        items = builtins + (["--- My Custom Presets ---"] + users if users else [])
+        self.fx_preset_combo['values'] = items
+        target = select_name or self.receiver.processor.active_preset
+        if target in items:
+            self.fx_preset_combo.set(target)
+        else:
+            self.fx_preset_combo.set("Default (Studio Clean)")
+        self._update_fx_delete_btn_state()
+
+    def _update_fx_delete_btn_state(self):
+        cur = self.fx_preset_combo.get()
+        if cur in self.config.data.get("user_fx_presets", {}):
+            self.fx_del_btn.config(state="normal", bg="#7f1d1d", fg="#ffffff")
+        else:
+            self.fx_del_btn.config(state="disabled", bg=self.C_SURFACE_ALT, fg=self.C_TEXT_MUTED)
+
+    def on_fx_preset_selected(self, event=None):
+        sel = self.fx_preset_combo.get()
+        if sel.startswith("---"):
+            self.fx_preset_combo.set(self.receiver.processor.active_preset)
+            return
+        self.apply_named_fx_preset(sel)
+
+    def apply_named_fx_preset(self, name):
+        p = self.receiver.processor
+        if name in AudioProcessor.FX_BUILTIN_PRESETS:
+            preset = AudioProcessor.FX_BUILTIN_PRESETS[name]
+        elif name in self.config.data.get("user_fx_presets", {}):
+            preset = self.config.data["user_fx_presets"][name]
+        else:
+            return
+
+        p.set_fx_preset_dict(preset, name=name)
+        # Update UI controls
+        self.nc_scale.set(int(p.noise_cancel_amount * 100))
+        self.nc_val_lbl.config(text=f"{int(p.noise_cancel_amount * 100)}%")
+        if p.smart_noise_cancel:
+            self.nc_toggle_btn.config(text="[✓] Active (Wiener Filter)", bg="#059669")
+        else:
+            self.nc_toggle_btn.config(text="[Off] Disabled (Bypass)", bg="#374151")
+
+        self.eq_low_scale.set(p.eq_low_gain_db)
+        self.eq_low_lbl.config(text=f"{p.eq_low_gain_db:+.1f} dB")
+        self.eq_mid_scale.set(p.eq_mid_gain_db)
+        self.eq_mid_lbl.config(text=f"{p.eq_mid_gain_db:+.1f} dB")
+        self.eq_high_scale.set(p.eq_high_gain_db)
+        self.eq_high_lbl.config(text=f"{p.eq_high_gain_db:+.1f} dB")
+
+        self.gate_scale.set(int(p.gate_threshold_db))
+        self.gate_val_lbl.config(text=f"{int(p.gate_threshold_db)} dB")
+
+        self.mon_vol_scale.set(int(p.monitor_volume * 100))
+        self.mon_vol_lbl.config(text=f"{int(p.monitor_volume * 100)}%")
+
+        self.fx_preset_combo.set(name)
+        self._update_fx_delete_btn_state()
+        self._save_fx_config()
+        self.notice_lbl.config(text=f"Studio FX Preset applied: {name}", fg=self.C_PRIMARY)
+
+    def on_save_fx_preset(self):
+        dialog = PromptDialog(self.root, "Save Studio FX Preset", "Enter a name for your custom FX preset:")
+        if dialog.result:
+            name = dialog.result
+            p = self.receiver.processor
+            preset_data = {
+                "gain": p.gain,
+                "smart_noise_cancel": p.smart_noise_cancel,
+                "noise_cancel_amount": p.noise_cancel_amount,
+                "gate_threshold_db": p.gate_threshold_db,
+                "eq_low_gain_db": p.eq_low_gain_db,
+                "eq_mid_gain_db": p.eq_mid_gain_db,
+                "eq_high_gain_db": p.eq_high_gain_db,
+                "monitor_volume": p.monitor_volume
+            }
+            if "user_fx_presets" not in self.config.data:
+                self.config.data["user_fx_presets"] = {}
+            self.config.data["user_fx_presets"][name] = preset_data
+            p.active_preset = name
+            self._save_fx_config()
+            self._refresh_fx_preset_combo(select_name=name)
+            self.notice_lbl.config(text=f"Custom FX preset '{name}' saved!", fg=self.C_SUCCESS)
+
+    def on_delete_fx_preset(self):
+        cur = self.fx_preset_combo.get()
+        if cur in self.config.data.get("user_fx_presets", {}):
+            del self.config.data["user_fx_presets"][cur]
+            self.receiver.processor.active_preset = "Default (Studio Clean)"
+            self._save_fx_config()
+            self._refresh_fx_preset_combo(select_name="Default (Studio Clean)")
+            self.apply_named_fx_preset("Default (Studio Clean)")
+            self.notice_lbl.config(text=f"Deleted custom preset '{cur}'", fg=self.C_WARNING)
+
     def on_toggle_nc(self):
         p = self.receiver.processor
         p.smart_noise_cancel = not p.smart_noise_cancel
@@ -2617,11 +3054,13 @@ class PhoneMicGui:
         else:
             self.nc_toggle_btn.config(text="[Off] Disabled (Bypass)", bg="#374151")
             self.notice_lbl.config(text="Noise cancellation bypassed (raw microphone stream)", fg=self.C_TEXT_MUTED)
+        self._save_fx_config()
 
     def on_nc_amount_changed(self, val):
         pct = float(val) / 100.0
         self.receiver.processor.noise_cancel_amount = pct
         self.nc_val_lbl.config(text=f"{int(val)}%")
+        self._save_fx_config()
 
     def apply_eq_preset(self, low_db, mid_db, high_db):
         self.eq_low_scale.set(low_db)
@@ -2630,47 +3069,246 @@ class PhoneMicGui:
         self.on_eq_low_changed(low_db)
         self.on_eq_mid_changed(mid_db)
         self.on_eq_high_changed(high_db)
-        self.notice_lbl.config(text=f"EQ Preset Applied: Low {low_db:+.1f}dB, Mid {mid_db:+.1f}dB, High {high_db:+.1f}dB", fg=self.C_PRIMARY)
+        self.notice_lbl.config(text=f"EQ curve set: Low {low_db:+.1f}dB, Mid {mid_db:+.1f}dB, High {high_db:+.1f}dB", fg=self.C_PRIMARY)
 
     def on_eq_low_changed(self, val):
         db = float(val)
         self.receiver.processor.update_eq(low_db=db)
         self.eq_low_lbl.config(text=f"{db:+.1f} dB")
+        self._save_fx_config()
 
     def on_eq_mid_changed(self, val):
         db = float(val)
         self.receiver.processor.update_eq(mid_db=db)
         self.eq_mid_lbl.config(text=f"{db:+.1f} dB")
+        self._save_fx_config()
 
     def on_eq_high_changed(self, val):
         db = float(val)
         self.receiver.processor.update_eq(high_db=db)
         self.eq_high_lbl.config(text=f"{db:+.1f} dB")
+        self._save_fx_config()
 
-    def on_pitch_changed(self, val):
+    def on_gate_changed(self, val):
+        g = float(val)
+        self.receiver.processor.gate_threshold_db = g
+        self.gate_val_lbl.config(text=f"{int(g)} dB")
+        self._save_fx_config()
+
+    def on_mon_vol_changed(self, val):
+        vol = float(val) / 100.0
+        self.receiver.processor.monitor_volume = vol
+        self.mon_vol_lbl.config(text=f"{int(val)}%")
+        self._save_fx_config()
+
+    # --------------------------------------------------------------------------
+    # VOICE CHANGER CALLBACKS & PRESET MANAGEMENT
+    # --------------------------------------------------------------------------
+    def _save_vc_config(self):
+        vc = self.receiver.processor.voice_changer
+        self.config.data["voice_changer"] = {
+            "enabled": vc.enabled,
+            "active_preset": vc.active_preset,
+            "mode": vc.mode,
+            "pitch_semitones": vc.pitch_semitones,
+            "mix": vc.mix
+        }
+        self.config.save()
+
+    def _refresh_vc_preset_combo(self, select_name=None):
+        builtins = list(VoiceChanger.BUILTIN_PRESETS.keys())
+        users = list(self.config.data.get("user_voice_presets", {}).keys())
+        items = builtins + (["--- My Custom Presets ---"] + users if users else [])
+        self.vc_preset_combo['values'] = items
+        target = select_name or self.receiver.processor.voice_changer.active_preset
+        if target in items:
+            self.vc_preset_combo.set(target)
+        else:
+            self.vc_preset_combo.set("Normal (Bypass)")
+        self._update_vc_delete_btn_state()
+
+    def _update_vc_delete_btn_state(self):
+        cur = self.vc_preset_combo.get()
+        if cur in self.config.data.get("user_voice_presets", {}):
+            self.vc_del_btn.config(state="normal", bg="#7f1d1d", fg="#ffffff")
+        else:
+            self.vc_del_btn.config(state="disabled", bg=self.C_SURFACE_ALT, fg=self.C_TEXT_MUTED)
+
+    def on_vc_preset_selected(self, event=None):
+        sel = self.vc_preset_combo.get()
+        if sel.startswith("---"):
+            self.vc_preset_combo.set(self.receiver.processor.voice_changer.active_preset)
+            return
+        self.apply_named_vc_preset(sel)
+
+    def apply_named_vc_preset(self, name):
+        vc = self.receiver.processor.voice_changer
+        if name in VoiceChanger.BUILTIN_PRESETS:
+            preset = VoiceChanger.BUILTIN_PRESETS[name]
+        elif name in self.config.data.get("user_voice_presets", {}):
+            preset = self.config.data["user_voice_presets"][name]
+        else:
+            return
+
+        vc.set_preset_dict(preset, name=name)
+        if vc.enabled:
+            self.vc_toggle_btn.config(text="[✓] Voice Changer ACTIVE", bg=self.C_PURPLE)
+        else:
+            self.vc_toggle_btn.config(text="[Off] Bypassed (Pass-Through - 0 Latency)", bg="#374151")
+
+        self.vc_pitch_scale.set(vc.pitch_semitones)
+        self._update_pitch_val_label(vc.pitch_semitones)
+        self.vc_mix_scale.set(int(vc.mix * 100))
+        self.vc_mix_val_lbl.config(text=f"{int(vc.mix * 100)}%")
+        self._update_vc_mode_ui(vc.mode)
+
+        self.vc_preset_combo.set(name)
+        self._update_vc_delete_btn_state()
+        self._save_vc_config()
+        self.notice_lbl.config(text=f"Voice Preset applied: {name}", fg=self.C_PURPLE)
+
+    def on_save_vc_preset(self):
+        dialog = PromptDialog(self.root, "Save Voice Preset", "Enter a name for your custom voice preset:")
+        if dialog.result:
+            name = dialog.result
+            vc = self.receiver.processor.voice_changer
+            preset_data = {
+                "enabled": vc.enabled,
+                "mode": vc.mode,
+                "pitch_semitones": vc.pitch_semitones,
+                "mix": vc.mix
+            }
+            if "user_voice_presets" not in self.config.data:
+                self.config.data["user_voice_presets"] = {}
+            self.config.data["user_voice_presets"][name] = preset_data
+            vc.active_preset = name
+            self._save_vc_config()
+            self._refresh_vc_preset_combo(select_name=name)
+            self.notice_lbl.config(text=f"Custom voice preset '{name}' saved!", fg=self.C_PURPLE)
+
+    def on_delete_vc_preset(self):
+        cur = self.vc_preset_combo.get()
+        if cur in self.config.data.get("user_voice_presets", {}):
+            del self.config.data["user_voice_presets"][cur]
+            self.receiver.processor.voice_changer.active_preset = "Normal (Bypass)"
+            self._save_vc_config()
+            self._refresh_vc_preset_combo(select_name="Normal (Bypass)")
+            self.apply_named_vc_preset("Normal (Bypass)")
+            self.notice_lbl.config(text=f"Deleted custom voice preset '{cur}'", fg=self.C_WARNING)
+
+    def on_toggle_vc_enabled(self):
+        vc = self.receiver.processor.voice_changer
+        vc.enabled = not vc.enabled
+        if vc.enabled:
+            self.vc_toggle_btn.config(text="[✓] Voice Changer ACTIVE", bg=self.C_PURPLE)
+            self.notice_lbl.config(text="Voice Changer ENABLED (Isolated modular DSP stage)", fg=self.C_PURPLE)
+        else:
+            self.vc_toggle_btn.config(text="[Off] Bypassed (Pass-Through - 0 Latency)", bg="#374151")
+            self.notice_lbl.config(text="Voice Changer bypassed (raw passthrough)", fg=self.C_TEXT_MUTED)
+        self._save_vc_config()
+
+    def set_vc_mode(self, mode_name):
+        vc = self.receiver.processor.voice_changer
+        vc.mode = mode_name
+        self._update_vc_mode_ui(mode_name)
+        self._save_vc_config()
+        self.notice_lbl.config(text=f"Voice Mode: {mode_name}", fg=self.C_PURPLE)
+
+    def _update_vc_mode_ui(self, mode_name):
+        for m, btn in getattr(self, 'mode_btns', {}).items():
+            if m == mode_name:
+                btn.config(bg=self.C_PURPLE, fg="#ffffff")
+            else:
+                btn.config(bg=self.C_SURFACE_ALT, fg=self.C_TEXT_PRI)
+        desc = VoiceChanger.MODE_DESCRIPTIONS.get(mode_name, "")
+        if hasattr(self, 'mode_desc_lbl'):
+            self.mode_desc_lbl.config(text=desc)
+
+    def on_vc_pitch_changed(self, val):
         st = float(val)
-        self.receiver.processor.pitch_shift_semitones = st
+        vc = self.receiver.processor.voice_changer
+        vc.pitch_semitones = st
+        self._update_pitch_val_label(st)
+        self._save_vc_config()
+
+    def _update_pitch_val_label(self, st):
         if abs(st) < 0.15:
             desc = "0.0 st (Natural)"
         elif st > 0:
             desc = f"+{st:.1f} st (Higher)"
         else:
             desc = f"{st:.1f} st (Deeper)"
-        self.pitch_val_lbl.config(text=desc)
+        if hasattr(self, 'vc_pitch_val_lbl'):
+            self.vc_pitch_val_lbl.config(text=desc)
 
-    def set_pitch_preset(self, st):
-        self.pitch_scale.set(st)
-        self.on_pitch_changed(st)
+    def set_vc_pitch_preset(self, st):
+        self.vc_pitch_scale.set(st)
+        self.on_vc_pitch_changed(st)
 
-    def on_gate_changed(self, val):
-        g = float(val)
-        self.receiver.processor.gate_threshold_db = g
-        self.gate_val_lbl.config(text=f"{int(g)} dB")
+    def on_vc_mix_changed(self, val):
+        m = float(val) / 100.0
+        vc = self.receiver.processor.voice_changer
+        vc.mix = m
+        self.vc_mix_val_lbl.config(text=f"{int(val)}%")
+        self._save_vc_config()
 
-    def on_mon_vol_changed(self, val):
-        vol = float(val) / 100.0
-        self.receiver.processor.monitor_volume = vol
-        self.mon_vol_lbl.config(text=f"{int(val)}%")
+    def _restore_ui_from_config(self):
+        """Restores all control states and active presets from persistent config."""
+        try:
+            p = self.receiver.processor
+            vc = p.voice_changer
+
+            # 1. FX Page
+            self.nc_scale.set(int(p.noise_cancel_amount * 100))
+            self.nc_val_lbl.config(text=f"{int(p.noise_cancel_amount * 100)}%")
+            if p.smart_noise_cancel:
+                self.nc_toggle_btn.config(text="[✓] Active (Wiener Filter)", bg="#059669")
+            else:
+                self.nc_toggle_btn.config(text="[Off] Disabled (Bypass)", bg="#374151")
+
+            self.eq_low_scale.set(p.eq_low_gain_db)
+            self.eq_low_lbl.config(text=f"{p.eq_low_gain_db:+.1f} dB")
+            self.eq_mid_scale.set(p.eq_mid_gain_db)
+            self.eq_mid_lbl.config(text=f"{p.eq_mid_gain_db:+.1f} dB")
+            self.eq_high_scale.set(p.eq_high_gain_db)
+            self.eq_high_lbl.config(text=f"{p.eq_high_gain_db:+.1f} dB")
+
+            self.gate_scale.set(int(p.gate_threshold_db))
+            self.gate_val_lbl.config(text=f"{int(p.gate_threshold_db)} dB")
+
+            self.mon_vol_scale.set(int(p.monitor_volume * 100))
+            self.mon_vol_lbl.config(text=f"{int(p.monitor_volume * 100)}%")
+
+            self.gain_scale.set(p.gain)
+            db = 20.0 * math.log10(p.gain) if p.gain > 1e-3 else -80.0
+            self.gain_val_lbl.config(text=f"{p.gain:.1f}x ({db:+.1f} dB)")
+
+            self._refresh_fx_preset_combo(p.active_preset)
+
+            # 2. Voice Changer Page
+            if vc.enabled:
+                self.vc_toggle_btn.config(text="[✓] Voice Changer ACTIVE", bg=self.C_PURPLE)
+            else:
+                self.vc_toggle_btn.config(text="[Off] Bypassed (Pass-Through - 0 Latency)", bg="#374151")
+
+            self.vc_pitch_scale.set(vc.pitch_semitones)
+            self._update_pitch_val_label(vc.pitch_semitones)
+            self.vc_mix_scale.set(int(vc.mix * 100))
+            self.vc_mix_val_lbl.config(text=f"{int(vc.mix * 100)}%")
+            self._update_vc_mode_ui(vc.mode)
+
+            self._refresh_vc_preset_combo(vc.active_preset)
+
+            # 3. Visualizer
+            vis_mode = self.config.data.get("visualizer_mode", "spectrum")
+            if vis_mode == "oscilloscope":
+                self.visualizer_mode = "oscilloscope"
+                self.vis_mode_btn.config(text="Oscilloscope Wave ▾", fg=self.C_SUCCESS)
+            else:
+                self.visualizer_mode = "spectrum"
+                self.vis_mode_btn.config(text="32-Band Spectrum ▾", fg=self.C_PRIMARY)
+        except Exception as e:
+            print(f"[!] Restore UI notice: {e}")
 
     # ==========================================================================
     # TAB 3: NETWORK & DEVICE ROUTING
@@ -3162,23 +3800,45 @@ def main():
         if not run_interactive_dependency_fixer():
             print(f"{Colors.YELLOW}[!] Proceeding in basic fallback mode.{Colors.RESET}")
 
+    config = ConfigManager()
+
     cable_dev, default_out, all_devices = find_audio_devices()
     target_idx = cable_dev[0] if cable_dev else (default_out[0] if default_out else None)
     monitor_idx = default_out[0] if default_out else None
 
+    # Restore saved device preference if configured
+    saved_target = config.data.get("target_device_name")
+    if saved_target and all_devices:
+        for idx, dev in all_devices:
+            if dev.get('name') == saved_target:
+                target_idx = idx
+                break
+
+    saved_mon = config.data.get("monitor_device_name")
+    if saved_mon and all_devices:
+        for idx, dev in all_devices:
+            if dev.get('name') == saved_mon:
+                monitor_idx = idx
+                break
+
     receiver = PhoneMicReceiver(
         port=DEFAULT_PORT,
         target_device=target_idx,
-        monitor_device=monitor_idx
+        monitor_device=monitor_idx,
+        config=config
     )
     receiver.start()
 
     if not force_cli and TKINTER_AVAILABLE:
         try:
             root = tk.Tk()
-            gui = PhoneMicGui(root, receiver)
+            gui = PhoneMicGui(root, receiver, config=config)
 
             def on_closing():
+                try:
+                    config.save()
+                except Exception:
+                    pass
                 receiver.stop()
                 root.destroy()
 
