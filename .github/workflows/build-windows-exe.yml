@@ -2,10 +2,12 @@ name: Build Windows Receiver EXE
 
 on:
   push:
-    paths:
-      - 'windows_receiver/**'
-      - '.github/workflows/build-windows-exe.yml'
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -30,14 +32,20 @@ jobs:
         run: |
           pyinstaller --clean PhoneMicReceiver.spec
 
-      - name: Copy auxiliary scripts
-        working-directory: windows_receiver
+      - name: Package Windows Receiver ZIP
         run: |
-          Copy-Item fix_firewall.bat dist/
-          Copy-Item README.md dist/
+          Copy-Item windows_receiver/fix_firewall.bat windows_receiver/dist/
+          Copy-Item windows_receiver/README.md windows_receiver/dist/
+          Compress-Archive -Path windows_receiver/dist/* -DestinationPath PhoneMicReceiver-Windows.zip -Force
 
       - name: Upload PhoneMicReceiver artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PhoneMicReceiver-Windows-v0.6.5
-          path: windows_receiver/dist/
+          name: PhoneMicReceiver-Windows
+          path: PhoneMicReceiver-Windows.zip
+
+      - name: Attach to GitHub Release (when tagged)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PhoneMicReceiver-Windows.zip

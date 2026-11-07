@@ -1,107 +1,73 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller Spec File for PhoneMic Windows Receiver v0.7.5
-Bundles PhoneMic Receiver, Tkinter GUI, SoundDevice, PortAudio DLLs, NumPy, and all dependencies
-into a single standalone Windows executable (PhoneMicReceiver.exe).
-"""
+PyInstaller spec for PhoneMic Windows Receiver v0.11.0
 
-import sys
+    pyinstaller --clean PhoneMicReceiver.spec                 -> dist\PhoneMicReceiver.exe        (single file, portable)
+    set PM_ONEDIR=1 && pyinstaller --clean PhoneMicReceiver.spec
+                                                              -> dist\PhoneMicReceiver\            (folder, starts instantly)
+"""
 import os
 from PyInstaller.utils.hooks import collect_all
 
-block_cipher = None
+ONEDIR = os.environ.get("PM_ONEDIR", "") == "1"
+ICON = os.path.join("assets", "phonemic.ico")
 
-datas = []
-binaries = []
+datas, binaries = [], []
 hiddenimports = [
-    'sounddevice',
-    '_sounddevice_data',
-    'numpy',
-    'tkinter',
-    'tkinter.ttk',
-    'tkinter.messagebox',
-    '_tkinter',
-    'queue',
-    'threading',
-    'socket',
-    'struct',
-    'math',
-    'wave',
-    'webbrowser',
-    'platform',
-    'shutil',
-    'ctypes',
-    'json',
-    'subprocess',
+    "sounddevice", "_sounddevice_data", "numpy", "pystray", "pystray._win32", "PIL", "PIL.Image", "PIL.ImageDraw", "winsound",
+    "tkinter", "tkinter.ttk", "tkinter.messagebox", "tkinter.filedialog", "_tkinter",
+    "winreg", "wave", "webbrowser",
+    # the application package (listed explicitly so the lazy imports in gui/launcher are always bundled)
+    "phonemic", "phonemic.const", "phonemic.config", "phonemic.system", "phonemic.dsp", "phonemic.engine",
+    "phonemic.widgets", "phonemic.ui_kit", "phonemic.gui", "phonemic.pages", "phonemic.wizard", "phonemic.cli", "phonemic.icon",
+    "phonemic.bindings", "phonemic.settings_meta", "phonemic.presets_io", "phonemic.hotkeys", "phonemic.tray", "phonemic.cues",
+    "phonemic.selftest",
 ]
 
-# Collect all sounddevice binaries, PortAudio DLLs, and package data
-try:
-    sd_datas, sd_binaries, sd_hidden = collect_all('sounddevice')
-    datas += sd_datas
-    binaries += sd_binaries
-    hiddenimports += sd_hidden
-except Exception:
-    pass
+# PortAudio DLL + sounddevice package data
+for pkg in ("sounddevice", "_sounddevice_data", "pystray"):
+    try:
+        d, b, h = collect_all(pkg)
+        datas += d
+        binaries += b
+        hiddenimports += h
+    except Exception:
+        pass
 
-# Collect all numpy data and C-extension binaries
-try:
-    np_datas, np_binaries, np_hidden = collect_all('numpy')
-    datas += np_datas
-    binaries += np_binaries
-    hiddenimports += np_hidden
-except Exception:
-    pass
-
-# Collect tkinter data if available
-try:
-    tk_datas, tk_binaries, tk_hidden = collect_all('tkinter')
-    datas += tk_datas
-    binaries += tk_binaries
-    hiddenimports += tk_hidden
-except Exception:
-    pass
+# Things that may be installed in your global Python but are never used here (keeps the exe small)
+excludes = ["scipy", "matplotlib", "pandas", "IPython", "pytest", "notebook", "sphinx", "numba", "torch", "cv2"]
 
 a = Analysis(
-    ['phonemic_receiver.py'],
-    pathex=[],
+    ["phonemic_receiver.py"],
+    pathex=["."],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
+    excludes=excludes,
     noarchive=False,
 )
+pyz = PYZ(a.pure, a.zipped_data)
 
-pyz = PYZ(
-    a.pure,
-    a.zipped_data,
-    cipher=block_cipher
-)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name='PhoneMicReceiver',
+exe_kwargs = dict(
+    name="PhoneMicReceiver",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
+    upx=False,                 # UPX makes startup slower and triggers antivirus false positives
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=ICON if os.path.exists(ICON) else None,
 )
+
+if ONEDIR:
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, **exe_kwargs)
+    coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=False, name="PhoneMicReceiver")
+else:
+    exe = EXE(pyz, a.scripts, a.binaries, a.zipfiles, a.datas, [], runtime_tmpdir=None, **exe_kwargs)

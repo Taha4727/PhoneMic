@@ -1,27 +1,26 @@
-# PhoneMic Windows Receiver - One-Click PowerShell Launcher
-$Host.UI.RawUI.WindowTitle = "PhoneMic Windows Receiver v0.6.1"
-Write-Host "===============================================================================" -ForegroundColor Cyan
-Write-Host "                  PhoneMic Windows Receiver v0.6.1 Launcher                    " -ForegroundColor Cyan
-Write-Host "===============================================================================" -ForegroundColor Cyan
-Write-Host ""
+# PhoneMic Windows Receiver v0.11.0 - PowerShell launcher
+$Host.UI.RawUI.WindowTitle = "PhoneMic Windows Receiver v0.11.0"
 
-# Check Python
+$exe = @("PhoneMicReceiver.exe", "dist\PhoneMicReceiver.exe", "dist\PhoneMicReceiver\PhoneMicReceiver.exe") |
+    ForEach-Object { Join-Path $PSScriptRoot $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($exe) {
+    Write-Host "[*] Starting $exe" -ForegroundColor Green
+    Start-Process -FilePath $exe -ArgumentList $args
+    exit 0
+}
+
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     Write-Host "[ERROR] Python is not installed or not in PATH." -ForegroundColor Red
-    Write-Host "Download Python from https://www.python.org and check 'Add Python to PATH'." -ForegroundColor Yellow
-    Read-Host "Press Enter to exit..."
+    Write-Host "Download it from https://www.python.org and tick 'Add Python to PATH'." -ForegroundColor Yellow
+    Read-Host "Press Enter to exit"
     exit 1
 }
 
-# Check Packages
-Write-Host "[*] Checking audio libraries (sounddevice, numpy)..." -ForegroundColor Gray
-$check = python -c "import sounddevice, numpy" 2>$null
+python -c "import numpy, sounddevice" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[*] Installing required packages..." -ForegroundColor Yellow
-    pip install sounddevice numpy
+    Write-Host "[*] Installing required packages (numpy, sounddevice)..." -ForegroundColor Yellow
+    python -m pip install -r (Join-Path $PSScriptRoot "requirements.txt")
 }
 
-# Run Receiver
-$scriptPath = Join-Path $PSScriptRoot "phonemic_receiver.py"
 Write-Host "[*] Starting PhoneMic Receiver..." -ForegroundColor Green
-python $scriptPath
+python (Join-Path $PSScriptRoot "phonemic_receiver.py") @args

@@ -11,24 +11,32 @@ MADE WITH AI
 
 ---
 
-## 🚀 Automated GitHub Actions APK Builds
+## 🚀 Releases & Automated CI Builds
 
-This repository includes an automated GitHub Actions CI workflow (`.github/workflows/build-apk.yml`):
+### What's New in v1.1.0
+- **Keep Screen Awake**: Toggle in Settings and automatic `FLAG_KEEP_SCREEN_ON` prevention so the phone screen doesn't turn off during active sessions.
+- **POCO F6 & Xiaomi HyperOS / Android 16 Support**:
+  - Independent Microphone Permission Banner with direct "Open App Settings" shortcut to grant "While using the app" without repeat prompts.
+  - Resolved installation compatibility for Android 16.
+- **Graceful Socket Lifecycle**: Fixed `SocketException: Socket is closed` on stream termination/disconnect for both UDP and TCP streaming.
+- **Multi-Platform CI**: Automated GitHub Actions workflows for building both the Android APK (`PhoneMic-debug.apk`) and Windows Receiver standalone executable bundle (`PhoneMicReceiver-Windows.zip`).
 
-- **Automatic Trigger:** Runs on every `push` to `main`/`master`, on pull requests, or manually via **Workflow Dispatch**.
-- **Download the APK:**
-  1. Go to the **Actions** tab in your GitHub repository.
-  2. Click on the latest workflow run.
-  3. Under **Artifacts**, download `PhoneMic-debug-apk.zip` to get your ready-to-install `PhoneMic-debug.apk`.
-- **GitHub Releases:** Creating a git release tag (e.g. `git tag v1.0 && git push --tags`) automatically creates a GitHub Release and attaches the compiled APK file.
+### How to Publish a New Release
+1. In the AI Studio interface, use the **Push to GitHub** option to push the latest codebase to your GitHub repository.
+2. In your GitHub repository:
+   - Navigate to **Releases** → **Draft a new release**.
+   - Create a new tag (e.g. `v1.1.0`) targeting `main` (or run `git tag v1.1.0 && git push --tags` locally).
+   - Click **Publish release**.
+3. GitHub Actions will automatically compile the Android APK and the Windows Receiver ZIP package, attaching both binaries directly to the release!
 
 ---
 
-## ⚡ POCO X6 Pro 5G & Xiaomi HyperOS Optimization
+## ⚡ POCO & Xiaomi HyperOS Optimization
 
 1. **Wi-Fi 6 Low-Latency Lock:** Automatically acquires `WIFI_MODE_FULL_LOW_LATENCY` to disable Wi-Fi power-save sleep cycles.
 2. **Studio Raw (Unprocessed):** Bypasses hardware echo-cancellation to stream studio-quality vocal dynamic range.
 3. **HyperOS Background Guard:** Tap the in-app banner to grant battery optimization exemption and open HyperOS settings to set Battery Saver to **"No restrictions"** and enable **"Autostart"**.
+4. **Persistent Microphone Access:** Grant permission via the dedicated banner or App Info → Permissions to select "While using the app" to avoid system permission resets.
 
 ---
 

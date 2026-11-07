@@ -2,48 +2,46 @@
 title PhoneMic Windows Firewall Configurator
 color 0b
 
+:: Usage: fix_firewall.bat [port]      (default 5001 - use the port shown on the Network page)
+set "PM_PORT=%~1"
+if "%PM_PORT%"=="" set "PM_PORT=5001"
+
 echo ===============================================================================
-echo            PhoneMic Windows Firewall Fixer (USB Tether + Wi-Fi)
+echo        PhoneMic Windows Firewall Fixer  (USB tether + Wi-Fi)     port %PM_PORT%
 echo ===============================================================================
 echo.
 
-:: Check for Administrator elevation
 net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [!] Administrator permissions are required to configure firewall rules.
-    echo [*] Elevating to Administrator now...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd -ArgumentList '/c \"\"%~f0\"\"' -Verb RunAs"
-    exit /b
-)
+if not errorlevel 1 goto :admin
+echo [!] Administrator permission is required to change firewall rules.
+echo [*] Asking Windows for elevation...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%PM_PORT%' -Verb RunAs"
+exit /b
 
-echo [*] Adding Inbound UDP 5001 Rule (Profile=ALL: Private, Public, Domain)...
-netsh advfirewall firewall delete rule name="PhoneMic Receiver (UDP 5001)" >nul 2>&1
-netsh advfirewall firewall add rule name="PhoneMic Receiver (UDP 5001)" dir=in action=allow protocol=UDP localport=5001 profile=any enable=yes
+:admin
+echo [*] Inbound UDP %PM_PORT% (all network profiles)
+netsh advfirewall firewall delete rule name="PhoneMic Receiver (UDP %PM_PORT%)" >nul 2>&1
+netsh advfirewall firewall add rule name="PhoneMic Receiver (UDP %PM_PORT%)" dir=in action=allow protocol=UDP localport=%PM_PORT% profile=any enable=yes
 
-echo [*] Adding Inbound TCP 5001 Rule (Profile=ALL: Private, Public, Domain)...
-netsh advfirewall firewall delete rule name="PhoneMic Receiver (TCP 5001)" >nul 2>&1
-netsh advfirewall firewall add rule name="PhoneMic Receiver (TCP 5001)" dir=in action=allow protocol=TCP localport=5001 profile=any enable=yes
+echo [*] Inbound TCP %PM_PORT% (all network profiles)
+netsh advfirewall firewall delete rule name="PhoneMic Receiver (TCP %PM_PORT%)" >nul 2>&1
+netsh advfirewall firewall add rule name="PhoneMic Receiver (TCP %PM_PORT%)" dir=in action=allow protocol=TCP localport=%PM_PORT% profile=any enable=yes
 
-:: If PhoneMicReceiver.exe exists in directory or dist, add application rules too
-if exist "%~dp0PhoneMicReceiver.exe" (
-    echo [*] Adding Program Rule for PhoneMicReceiver.exe...
-    netsh advfirewall firewall delete rule name="PhoneMic Receiver App" >nul 2>&1
-    netsh advfirewall firewall add rule name="PhoneMic Receiver App" dir=in action=allow program="%~dp0PhoneMicReceiver.exe" profile=any enable=yes
-)
-
-if exist "%~dp0dist\PhoneMicReceiver.exe" (
-    echo [*] Adding Program Rule for dist\PhoneMicReceiver.exe...
-    netsh advfirewall firewall delete rule name="PhoneMic Receiver App Dist" >nul 2>&1
-    netsh advfirewall firewall add rule name="PhoneMic Receiver App Dist" dir=in action=allow program="%~dp0dist\PhoneMicReceiver.exe" profile=any enable=yes
-)
+if exist "%~dp0PhoneMicReceiver.exe" call :progrule "PhoneMic Receiver App" "%~dp0PhoneMicReceiver.exe"
+if exist "%~dp0dist\PhoneMicReceiver.exe" call :progrule "PhoneMic Receiver App Dist" "%~dp0dist\PhoneMicReceiver.exe"
 
 color 0a
 echo.
 echo ===============================================================================
-echo [SUCCESS] Windows Defender Firewall configured for PhoneMic!
+echo [SUCCESS] Windows Firewall is configured for PhoneMic (port %PM_PORT%)
 echo ===============================================================================
-echo.
-echo Both Wi-Fi and USB Tethering (Public Profile) connections are now allowed.
-echo You can now connect PhoneMic smoothly without any dropped audio packets.
+echo Wi-Fi and USB tethering connections ("Public" profile) are now allowed.
 echo.
 pause
+exit /b 0
+
+:progrule
+echo [*] Program rule: %~2
+netsh advfirewall firewall delete rule name=%1 >nul 2>&1
+netsh advfirewall firewall add rule name=%1 dir=in action=allow program=%2 profile=any enable=yes
+exit /b 0
