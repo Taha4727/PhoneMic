@@ -21,8 +21,8 @@ from collections import deque
 import numpy as np
 
 from . import system
-from .const import (VERSION, FRAME, FRAME_MS, SAMPLE_RATE, PACKET_MAGIC, DISCOVERY_PROBE, DISCOVERY_REPLY,
-                    CMD_PAUSE, CMD_RESUME, SIO_UDP_CONNRESET)
+from .const import (VERSION, FRAME, FRAME_MS, SAMPLE_RATE, PACKET_MAGIC, PACKET_MAGIC_24K, PACKET_MAGIC_16K,
+                    DISCOVERY_PROBE, DISCOVERY_REPLY, CMD_PAUSE, CMD_RESUME, SIO_UDP_CONNRESET)
 from .dsp import AudioProcessor
 
 try:                                    # PortAudio missing raises OSError, not ImportError
@@ -33,6 +33,41 @@ except Exception as _e:                 # noqa: BLE001
     SD_ERROR = str(_e)
 
 MASK32 = 0xFFFFFFFF
+
+
+def upsample_2x(x: np.ndarray) -> np.ndarray:
+    """Upsample 24 kHz float32 samples to 48 kHz using linear interpolation."""
+    n = len(x)
+    out = np.empty(n * 2, dtype=np.float32)
+    out[0::2] = x
+    x_next = np.append(x[1:], x[-1])
+    out[1::2] = (x + x_next) * 0.5
+    return out
+
+
+def upsample_3x(x: np.ndarray) -> np.ndarray:
+    """Upsample 16 kHz float32 samples to 48 kHz using linear interpolation."""
+    n = len(x)
+    out = np.empty(n * 3, dtype=np.float32)
+    x_next = np.append(x[1:], x[-1])
+    out[0::3] = x
+    out[1::3] = x * (2.0 / 3.0) + x_next * (1.0 / 3.0)
+    out[2::3] = x * (1.0 / 3.0) + x_next * (2.0 / 3.0)
+    return out
+
+
+class ClientSession:
+    def __init__(self, addr, transport, sample_rate, jb):
+        self.addr = addr
+        self.ip = addr[0]
+        self.transport = transport
+        self.sample_rate = sample_rate
+        self.jb = jb
+        self.last_seen = time.monotonic()
+        self.last_seq = None
+        self.last_arrival = 0.0
+        self.packets = 0
+        self.bytes = 0
 
 
 # ==============================================================================
@@ -668,11 +703,13 @@ class NetServer:
     def _handle_datagram(self, sock, buf, n, addr):
         if n < 4:
             return
-        if n >= 8 and buf[:4] == PACKET_MAGIC:
+        if n >= 8 and bytes(buf[:4]) in (PACKET_MAGIC, PACKET_MAGIC_24K, PACKET_MAGIC_16K):
+            magic = bytes(buf[:4])
+            sr = 48000 if magic == PACKET_MAGIC else (24000 if magic == PACKET_MAGIC_24K else 16000)
             seq = struct.unpack(">I", buf[4:8])[0]
             pcm = bytes(buf[8:n - ((n - 8) & 1)])
             if len(pcm) >= 2:
-                self.rx.on_packet(seq, pcm, addr, "UDP")
+                self.rx.on_packet(seq, pcm, addr, "UDP", sample_rate=sr)
             return
         head = bytes(buf[:min(n, 32)])
         if head.startswith((b"PMD", DISCOVERY_PROBE)) or b"PMD0" in head or DISCOVERY_PROBE in head:
@@ -813,6 +850,8 @@ class Receiver:
         self.running = False
         self.client_ip = ""
         self.client_addr = None
+        self.client_sample_rate = 48000
+        self.client_streams = {}          # addr -> ClientSession for multi-device mixing
         self.transport = "UDP"
         self.tone_left = 0
         self.tone_total = 0
@@ -1030,10 +1069,11 @@ class Receiver:
         return self.jb.depth_ms + ring_ms + self.main.latency_ms + self.processor.latency_ms
 
     # -- network callbacks (called on socket threads; keep them cheap) ----------------
-    def on_packet(self, seq, pcm, addr, transport):
+    def on_packet(self, seq, pcm, addr, transport, sample_rate=48000):
         now = time.monotonic()
         st = self.stats
         ip = addr[0]
+        self.client_sample_rate = sample_rate
         gap = now - st.last_packet
         alive = st.last_packet > 0 and gap < self.stream_timeout
         if self.client_ip and ip != self.client_ip and alive and self.config.data["network"]["lock_client"]:
@@ -1041,6 +1081,22 @@ class Receiver:
             if st.ignored == 1 or st.ignored % 500 == 0:
                 self.log.warn(f"Ignoring audio from {ip}: already receiving from {self.client_ip}")
             return
+
+        # Multi-client session tracking
+        session = self.client_streams.get(addr)
+        if session is None:
+            a = self.config.data["audio"]
+            jb = JitterBuffer(a["jitter_ms"], a["adaptive_jitter"])
+            session = ClientSession(addr, transport, sample_rate, jb)
+            self.client_streams[addr] = session
+            if len(self.client_streams) > 1:
+                self.log.info(f"Additional phone connected: {ip} ({sample_rate // 1000}kHz) [Total: {len(self.client_streams)} devices]")
+        else:
+            session.sample_rate = sample_rate
+            session.last_seen = now
+
+        session.jb.push(seq, pcm)
+
         if ip != self.client_ip or not alive:
             first = st.last_packet == 0 or ip != self.client_ip
             self.client_ip, self.client_addr, self.transport = ip, addr, transport
@@ -1050,7 +1106,7 @@ class Receiver:
             st.stream_start = now
             self.jb.reset()
             self._reset_dsp = True
-            self.log.info(f"{'Phone connected' if first else 'Stream resumed'}: {ip} via {transport}")
+            self.log.info(f"{'Phone connected' if first else 'Stream resumed'}: {ip} via {transport} ({sample_rate // 1000}kHz)")
         else:
             self.client_addr, self.transport = addr, transport
 
@@ -1151,10 +1207,48 @@ class Receiver:
 
     def _produce(self):
         """Pull one block from the jitter buffer, run the DSP chain, fan out. Returns False if there was nothing."""
+        # Prune dead client sessions
+        now = time.monotonic()
+        dead = [a for a, s in self.client_streams.items() if (now - s.last_seen) > 3.5]
+        for d in dead:
+            del self.client_streams[d]
+
+        multi_blocks = []
+        if len(self.client_streams) > 1:
+            for session in list(self.client_streams.values()):
+                p_pcm, _ = session.jb.pop()
+                if p_pcm is not None:
+                    p_x = np.frombuffer(p_pcm, dtype="<i2").astype(np.float32) * np.float32(1.0 / 32768.0)
+                    if session.sample_rate == 24000:
+                        p_x = upsample_2x(p_x)
+                    elif session.sample_rate == 16000:
+                        p_x = upsample_3x(p_x)
+                    if len(p_x) < FRAME:
+                        p_x = np.pad(p_x, (0, FRAME - len(p_x)))
+                    elif len(p_x) > FRAME:
+                        p_x = p_x[:FRAME]
+                    multi_blocks.append(p_x)
+
         pcm, kind = self.jb.pop()
         tone = self._tone_block(FRAME)
 
-        if pcm is None and kind == WAIT:
+        if multi_blocks:
+            # Multi-device active mixing
+            if self.config.data["network"].get("mix_mode", "sum") == "duck":
+                powers = [float(np.mean(b ** 2)) for b in multi_blocks]
+                max_idx = int(np.argmax(powers))
+                summed = np.zeros(FRAME, dtype=np.float32)
+                for idx, b in enumerate(multi_blocks):
+                    weight = 1.0 if idx == max_idx or powers[max_idx] < 1e-4 else 0.35
+                    summed += b * weight
+                x = np.tanh(summed * 1.1)
+            else:
+                summed = np.sum(multi_blocks, axis=0)
+                x = np.tanh(summed)
+            self._last_raw = x
+            self._plc_run = 0
+            pcm = True
+        elif pcm is None and kind == WAIT:
             self._plc_run = 0
             self._last_raw = None
             self._after_gap = True
@@ -1165,31 +1259,39 @@ class Receiver:
                 return False
             self._emit(tone, tone, tone)
             return True
-
-        if self._reset_dsp:
+        elif self._reset_dsp:
             self._reset_dsp = False
             self.processor.reset()
             self._after_gap = True
 
-        if pcm is not None:
-            x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) * np.float32(1.0 / 32768.0)
-            self._last_raw = x
-            self._plc_run = 0
-            if self.jb.take_skipped():
+        if not multi_blocks:
+            if pcm is not None:
+                x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) * np.float32(1.0 / 32768.0)
+                if self.client_sample_rate == 24000:
+                    x = upsample_2x(x)
+                elif self.client_sample_rate == 16000:
+                    x = upsample_3x(x)
+                if len(x) < FRAME:
+                    x = np.pad(x, (0, FRAME - len(x)))
+                elif len(x) > FRAME:
+                    x = x[:FRAME]
+                self._last_raw = x
+                self._plc_run = 0
+                if self.jb.take_skipped():
+                    self._after_gap = True
+            else:                                           # packet lost: repeat + fade the last block
+                self._plc_run += 1
+                self.stats.plc_frames += 1
+                base = self._last_raw if self._last_raw is not None else np.zeros(FRAME, np.float32)
+                if self.config.data["audio"]["plc_mode"] == "silence":
+                    x = np.zeros(len(base), np.float32)
+                elif self._plc_run == 1:
+                    x = base * np.linspace(0.8, 0.4, len(base), dtype=np.float32)
+                elif self._plc_run == 2:
+                    x = base * np.linspace(0.4, 0.0, len(base), dtype=np.float32)
+                else:
+                    x = np.zeros(len(base), np.float32)
                 self._after_gap = True
-        else:                                           # packet lost: repeat + fade the last block
-            self._plc_run += 1
-            self.stats.plc_frames += 1
-            base = self._last_raw if self._last_raw is not None else np.zeros(FRAME, np.float32)
-            if self.config.data["audio"]["plc_mode"] == "silence":
-                x = np.zeros(len(base), np.float32)
-            elif self._plc_run == 1:
-                x = base * np.linspace(0.8, 0.4, len(base), dtype=np.float32)
-            elif self._plc_run == 2:
-                x = base * np.linspace(0.4, 0.0, len(base), dtype=np.float32)
-            else:
-                x = np.zeros(len(base), np.float32)
-            self._after_gap = True
 
         raw = x
         if self.paused:

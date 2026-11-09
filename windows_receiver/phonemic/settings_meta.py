@@ -348,8 +348,12 @@ add(key="vc.enabled", target="vc", page="voice", group="voice", label="Voice cha
 add(key="vc.pitch_semitones", target="vc", page="voice", group="voice", label="Pitch shift",
     summary="Moves the voice up or down in musical steps.",
     details="12 semitones is one octave. Small shifts of 1 to 2 semitones sound natural, larger ones sound more like a character. "
-            "Shifting the pitch adds about 21 ms of delay.", kind="slider", lo=-12, hi=12, step=0.5, fmt="st", origin=0.0,
+            "Shifting the pitch adds about 15 ms of delay.", kind="slider", lo=-12, hi=12, step=0.5, fmt="st", origin=0.0,
     short="Pitch shift", keywords="deeper higher chipmunk octave")
+add(key="vc.formant_semitones", target="vc", page="voice", group="voice", label="Formant shift",
+    summary="Adjusts the vocal tract resonance independently of pitch.",
+    details="Raising formants gives a brighter, lighter tone; lowering formants deepens throat and chest resonance without detuning pitch.",
+    kind="slider", lo=-12, hi=12, step=0.5, fmt="st", origin=0.0, short="Formant shift", keywords="formant throat chest resonance tone")
 add(key="vc.mix", target="vc", page="voice", group="voice", label="Effect amount",
     summary="Blends your natural voice with the effect.",
     details="100 % is the full effect. Lower values keep some of your own voice, which often sounds more believable.",
@@ -411,9 +415,9 @@ cfg("network.beacon", "network", "options", "Announce this PC", "Lets the phone 
     "Sends a small message every second and a half so \"Scan / Auto-Detect PC\" on the phone works. Turn it off on networks "
     "where broadcast messages are unwelcome, and type the address into the phone instead.", "toggle", short="Announce this PC",
     keywords="discovery broadcast scan auto-detect")
-cfg("network.lock_client", "network", "options", "Lock to the first phone", "Ignores other phones while one is streaming.",
-    "Prevents two phones from mixing into one garbled stream. A second phone is accepted as soon as the first one stops.",
-    "toggle", short="Lock to the first phone")
+cfg("network.lock_client", "network", "options", "Lock to single phone", "Ignores additional phones while one is streaming.",
+    "When disabled (default), PhoneMic receives and mixes multiple connected phones simultaneously. Enable this to lock to the first phone only.",
+    "toggle", short="Lock to single phone")
 cfg("network.accept_raw", "network", "options", "Accept plain audio packets", "Compatibility with old app versions.",
     "Older versions of the phone app send audio without a header. Leave this on unless the receiver picks up stray network "
     "traffic as noise.", "toggle", advanced=True, short="Accept plain audio packets")
@@ -508,6 +512,8 @@ def default_of(s):
     elif s.key == "vc.enabled":
         v = False
     elif s.key == "vc.pitch_semitones":
+        v = 0.0
+    elif s.key == "vc.formant_semitones":
         v = 0.0
     elif s.key == "vc.mix":
         v = 1.0

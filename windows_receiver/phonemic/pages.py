@@ -18,6 +18,7 @@ from .const import VERSION, VB_CABLE_URL, CABLE_HINT
 from .widgets import T, dp, font, autowrap, FlatButton, Segmented, Combo, Card, Tooltip
 from .ui_kit import SettingRow, SettingsCard, PanelHeader, StageList, EQEditor, HotkeyEntry
 from .gui import Page, fmt_time
+from .qr import generate_qr_matrix
 
 GAP = 14
 EQ_FREQS = np.geomspace(20.0, 20000.0, 160)
@@ -309,6 +310,8 @@ class VoicePage(Page):
         card.pack(fill="x", pady=(0, gap))
         self.pitch_row = SettingRow(card.body, app, sm.BY_KEY["vc.pitch_semitones"])
         self.pitch_row.pack(fill="x", pady=(0, dp(14)))
+        self.formant_row = SettingRow(card.body, app, sm.BY_KEY["vc.formant_semitones"])
+        self.formant_row.pack(fill="x", pady=(0, dp(14)))
         self.mix_row = SettingRow(card.body, app, sm.BY_KEY["vc.mix"])
         self.mix_row.pack(fill="x", pady=(0, dp(10)))
         self.latency = hint(card.body, "")
@@ -355,7 +358,7 @@ class VoicePage(Page):
     def sync(self):
         app = self.app
         vc = app.proc.voice_changer
-        for r in (self.enable_row, self.pitch_row, self.mix_row):
+        for r in (self.enable_row, self.pitch_row, self.formant_row, self.mix_row):
             r.refresh()
         self.combo.set_values(app.voice_preset_names(), vc.active_preset)
         for m, b in self.mode_buttons.items():
@@ -369,7 +372,8 @@ class VoicePage(Page):
         self.sync()
 
     def focus_setting(self, s):
-        row = {"vc.enabled": self.enable_row, "vc.pitch_semitones": self.pitch_row, "vc.mix": self.mix_row}.get(s.key)
+        row = {"vc.enabled": self.enable_row, "vc.pitch_semitones": self.pitch_row,
+               "vc.formant_semitones": self.formant_row, "vc.mix": self.mix_row}.get(s.key)
         if row:
             row.set_details(True)
             row.flash()
@@ -548,6 +552,17 @@ class NetworkPage(Page):
         self._addr_key = None
         FlatButton(c.body, "Rescan adapters", self._rescan, size=9).pack(anchor="w", pady=(dp(10), 0))
 
+        # QR Code Instant Pairing Card
+        self.qr_card = Card(left, "Instant QR Code Pairing", pad=18)
+        self.qr_card.pack(fill="x", pady=(0, gap))
+        hint(self.qr_card.body, "Point your phone camera (Scan PC QR) at this code to connect instantly.").pack(fill="x", pady=(0, dp(8)))
+        self.qr_frame = tk.Frame(self.qr_card.body, bg=T.SURFACE)
+        self.qr_frame.pack(fill="x", pady=dp(4))
+        self.qr_canvas = tk.Canvas(self.qr_frame, width=dp(170), height=dp(170), bg="#ffffff", highlightthickness=0)
+        self.qr_canvas.pack(anchor="center")
+        self.qr_payload_label = label(self.qr_card.body, "", T.ACCENT, 9, "bold", bg=T.SURFACE)
+        self.qr_payload_label.pack(pady=(dp(6), 0), anchor="center")
+
         c = Card(left, "Phone connection", pad=18)
         c.pack(fill="x", pady=(0, gap))
         self.conn = {}
@@ -644,6 +659,31 @@ class NetworkPage(Page):
             ip.pack(side="left", padx=dp(10))
             ip.bind("<Button-1>", lambda e, a=i.ip: self.app.copy(a, "Copied the address"))
             FlatButton(r, "Copy", lambda a=i.ip: self.app.copy(a, "Copied the address"), size=8, padx=8, pady=3).pack(side="right")
+
+        best_ip = next((i.ip for i in ifaces if i.category in ("Wi-Fi", "USB Tether", "Ethernet")), ifaces[0].ip if ifaces else "192.168.1.100")
+        port = self.app.cfg.data["network"]["port"]
+        self._draw_qr(f"phonemic://{best_ip}:{port}?t=UDP")
+
+    def _draw_qr(self, payload):
+        try:
+            matrix = generate_qr_matrix(payload)
+            self.qr_canvas.delete("all")
+            n = len(matrix)
+            c_size = dp(170)
+            cell = c_size / (n + 4)
+            offset = cell * 2
+            self.qr_canvas.create_rectangle(0, 0, c_size, c_size, fill="#ffffff", outline="")
+            for y in range(n):
+                for x in range(n):
+                    if matrix[y][x]:
+                        x1 = offset + x * cell
+                        y1 = offset + y * cell
+                        x2 = x1 + cell
+                        y2 = y1 + cell
+                        self.qr_canvas.create_rectangle(x1, y1, x2, y2, fill="#000000", outline="")
+            self.qr_payload_label.configure(text=payload)
+        except Exception:
+            pass
 
     def on_show(self):
         self.refresh_addresses()

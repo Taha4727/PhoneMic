@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.Wifi
@@ -71,6 +72,7 @@ fun NetworkConfigSection(
     onIpChange: (String) -> Unit,
     onPortChange: (String) -> Unit,
     onScanClick: () -> Unit,
+    onScanQrClick: (() -> Unit)? = null,
     connectionMode: String = PhoneMicService.CONNECTION_WIFI,
     transportMode: String = PhoneMicService.TRANSPORT_UDP,
     onConnectionModeChange: ((String) -> Unit)? = null,
@@ -203,51 +205,90 @@ fun NetworkConfigSection(
             )
         }
 
-        // Auto-Detect PC Button (Clean text that never overflows!)
-        Button(
-            onClick = onScanClick,
-            enabled = isEnabled && !isScanningPc,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(38.dp)
-                .testTag("find_pc_button"),
-            shape = RoundedCornerShape(8.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF14293D),
-                contentColor = NeonCyan,
-                disabledContainerColor = Color(0xFF101B26),
-                disabledContentColor = TextMuted
-            ),
-            border = ButtonDefaults.outlinedButtonBorder.copy(
-                brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF1E3A5A))
-            )
+        // Discovery & Pairing Actions (Auto-Detect and QR Scan)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (isScanningPc) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(13.dp),
-                    color = NeonCyan,
-                    strokeWidth = 2.dp
+            Button(
+                onClick = onScanClick,
+                enabled = isEnabled && !isScanningPc,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(38.dp)
+                    .testTag("find_pc_button"),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF14293D),
+                    contentColor = NeonCyan,
+                    disabledContainerColor = Color(0xFF101B26),
+                    disabledContentColor = TextMuted
+                ),
+                border = ButtonDefaults.outlinedButtonBorder.copy(
+                    brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF1E3A5A))
                 )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Searching...",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Radar,
-                    contentDescription = null,
-                    modifier = Modifier.size(15.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Auto-Detect PC",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
+            ) {
+                if (isScanningPc) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(13.dp),
+                        color = NeonCyan,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Searching...",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Radar,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Auto-Detect PC",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            if (onScanQrClick != null) {
+                Button(
+                    onClick = onScanQrClick,
+                    enabled = isEnabled,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(38.dp)
+                        .testTag("scan_qr_button"),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF162032),
+                        contentColor = NeonCyan,
+                        disabledContainerColor = Color(0xFF101B26),
+                        disabledContentColor = TextMuted
+                    ),
+                    border = ButtonDefaults.outlinedButtonBorder.copy(
+                        brush = androidx.compose.ui.graphics.SolidColor(NeonCyan.copy(alpha = 0.4f))
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.QrCodeScanner,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Scan PC QR",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
             }
         }
 

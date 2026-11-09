@@ -46,7 +46,11 @@ data class PhoneMicUiState(
     val isIgnoringBatteryOptimizations: Boolean = true,
     val hasMicPermission: Boolean = false,
     val hasNotificationPermission: Boolean = false,
+    val hasCameraPermission: Boolean = false,
     val keepScreenAwake: Boolean = true,
+    val isOverlayEnabled: Boolean = false,
+    val showQrScanner: Boolean = false,
+    val audioQuality: PhoneMicService.Companion.AudioQuality = PhoneMicService.Companion.AudioQuality.STUDIO_48K,
     // Stream telemetry matched with Windows Receiver v0.6.5
     val packetsSent: Long = 0L,
     val bytesSent: Long = 0L,
@@ -68,6 +72,8 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         private const val PREF_MIC = "mic"
         private const val PREF_GAIN = "gain"
         private const val PREF_KEEP_SCREEN_AWAKE = "keep_screen_awake"
+        private const val PREF_OVERLAY = "floating_overlay"
+        private const val PREF_AUDIO_QUALITY = "audio_quality"
 
         private val IPV4_PATTERN = Pattern.compile(
             "^((25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\.){3}(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)$"
@@ -152,6 +158,9 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         val savedMic = prefs.getString(PREF_MIC, PhoneMicService.MIC_STANDARD) ?: PhoneMicService.MIC_STANDARD
         val savedGain = prefs.getFloat(PREF_GAIN, 1.0f)
         val savedKeepScreenAwake = prefs.getBoolean(PREF_KEEP_SCREEN_AWAKE, true)
+        val savedOverlay = prefs.getBoolean(PREF_OVERLAY, false)
+        val savedQualityId = prefs.getString(PREF_AUDIO_QUALITY, PhoneMicService.Companion.AudioQuality.STUDIO_48K.id)
+        val savedQuality = PhoneMicService.Companion.AudioQuality.fromId(savedQualityId)
 
         val app = getApplication<Application>()
         val hasMic = ContextCompat.checkSelfPermission(
@@ -164,6 +173,10 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
                 Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
         } else true
+        val hasCamera = ContextCompat.checkSelfPermission(
+            app,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
 
         val activeIp = if (savedConnection == PhoneMicService.CONNECTION_USB) savedUsbIp else savedWifiIp
 
@@ -176,9 +189,12 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             transportMode = savedTransport,
             micMode = savedMic,
             gain = savedGain,
+            audioQuality = savedQuality,
             keepScreenAwake = savedKeepScreenAwake,
+            isOverlayEnabled = savedOverlay,
             hasMicPermission = hasMic,
-            hasNotificationPermission = hasNotif
+            hasNotificationPermission = hasNotif,
+            hasCameraPermission = hasCamera
         )
     }
 
@@ -247,6 +263,11 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         savePreferences()
     }
 
+    fun setAudioQuality(quality: PhoneMicService.Companion.AudioQuality) {
+        _uiState.update { it.copy(audioQuality = quality) }
+        savePreferences()
+    }
+
     fun setGain(newGain: Float) {
         _uiState.update { it.copy(gain = newGain) }
         phoneMicService?.setGain(newGain)
@@ -271,12 +292,64 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             ) == PackageManager.PERMISSION_GRANTED
         } else true
 
+        val hasCam = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
         _uiState.update {
             it.copy(
                 hasMicPermission = hasMic,
-                hasNotificationPermission = hasNotif
+                hasNotificationPermission = hasNotif,
+                hasCameraPermission = hasCam
             )
         }
+    }
+
+    fun setQrScannerVisible(visible: Boolean) {
+        _uiState.update { it.copy(showQrScanner = visible) }
+    }
+
+    fun applyScannedConfig(config: com.example.ui.components.ScannedReceiverConfig) {
+        val cleanIp = config.ip.trim()
+        val portStr = config.port.toString()
+        _uiState.update { current ->
+            if (current.connectionMode == PhoneMicService.CONNECTION_USB) {
+                current.copy(
+                    ip = cleanIp,
+                    usbIp = cleanIp,
+                    port = portStr,
+                    transportMode = config.transport,
+                    scanFeedback = "Paired with $cleanIp:$portStr via QR code"
+                )
+            } else {
+                current.copy(
+                    ip = cleanIp,
+                    wifiIp = cleanIp,
+                    port = portStr,
+                    transportMode = config.transport,
+                    scanFeedback = "Paired with $cleanIp:$portStr via QR code"
+                )
+            }
+        }
+        savePreferences()
+    }
+
+    fun toggleFloatingOverlay(context: Context, enabled: Boolean) {
+        if (enabled) {
+            val intent = Intent(context, FloatingMicOverlayService::class.java).apply {
+                action = FloatingMicOverlayService.ACTION_START_OVERLAY
+            }
+            context.startService(intent)
+            _uiState.update { it.copy(isOverlayEnabled = true) }
+        } else {
+            val intent = Intent(context, FloatingMicOverlayService::class.java).apply {
+                action = FloatingMicOverlayService.ACTION_STOP_OVERLAY
+            }
+            context.startService(intent)
+            _uiState.update { it.copy(isOverlayEnabled = false) }
+        }
+        prefs.edit().putBoolean(PREF_OVERLAY, enabled).apply()
     }
 
     fun setGuideDialogVisible(visible: Boolean) {
@@ -318,6 +391,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             putExtra(PhoneMicService.EXTRA_CONNECTION, state.connectionMode)
             putExtra(PhoneMicService.EXTRA_MIC, state.micMode)
             putExtra(PhoneMicService.EXTRA_GAIN, state.gain)
+            putExtra(PhoneMicService.EXTRA_QUALITY, state.audioQuality.id)
         }
 
         try {
@@ -438,7 +512,9 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             .putString(PREF_CONNECTION, state.connectionMode)
             .putString(PREF_MIC, state.micMode)
             .putFloat(PREF_GAIN, state.gain)
+            .putString(PREF_AUDIO_QUALITY, state.audioQuality.id)
             .putBoolean(PREF_KEEP_SCREEN_AWAKE, state.keepScreenAwake)
+            .putBoolean(PREF_OVERLAY, state.isOverlayEnabled)
             .apply()
     }
 

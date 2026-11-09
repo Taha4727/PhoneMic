@@ -55,6 +55,9 @@ class PhoneMicService : Service() {
 
         const val ACTION_START = "com.example.phonemic.START"
         const val ACTION_STOP = "com.example.phonemic.STOP"
+        const val ACTION_PAUSE = "com.example.phonemic.PAUSE"
+        const val ACTION_RESUME = "com.example.phonemic.RESUME"
+        const val ACTION_TOGGLE_PAUSE = "com.example.phonemic.TOGGLE_PAUSE"
 
         const val EXTRA_IP = "ip"
         const val EXTRA_PORT = "port"
@@ -62,6 +65,31 @@ class PhoneMicService : Service() {
         const val EXTRA_CONNECTION = "connection"
         const val EXTRA_MIC = "mic"
         const val EXTRA_GAIN = "gain"
+        const val EXTRA_QUALITY = "quality"
+
+        const val QUALITY_STUDIO_48K = "48K"
+        const val QUALITY_BALANCED_24K = "24K"
+        const val QUALITY_LOW_16K = "16K"
+
+        enum class AudioQuality(
+            val id: String,
+            val sampleRate: Int,
+            val frameSamples: Int,
+            val magicTag: Byte,
+            val label: String,
+            val desc: String,
+            val estBandwidth: String
+        ) {
+            STUDIO_48K("48K", 48000, 480, '1'.code.toByte(), "Studio 48 kHz", "Full Audio Fidelity & Dynamics", "~768 kbps"),
+            BALANCED_24K("24K", 24000, 240, '2'.code.toByte(), "Balanced 24 kHz", "Clear Voice, 50% Bandwidth", "~384 kbps"),
+            LOW_BANDWIDTH_16K("16K", 16000, 160, '3'.code.toByte(), "Economy 16 kHz", "Low Data for Weak/Mobile Wi-Fi", "~256 kbps");
+
+            val packetSize: Int get() = frameSamples * 2
+
+            companion object {
+                fun fromId(id: String?): AudioQuality = values().firstOrNull { it.id.equals(id, ignoreCase = true) } ?: STUDIO_48K
+            }
+        }
 
         const val MIC_STANDARD = "MIC"
         const val MIC_CALL = "MIC"
@@ -81,6 +109,19 @@ class PhoneMicService : Service() {
         // Bidirectional remote commands from Windows Receiver
         private const val CMD_PAUSE = "PMP1"
         private const val CMD_RESUME = "PMR1"
+
+        data class ServiceSnapshot(
+            val running: Boolean = false,
+            val paused: Boolean = false,
+            val connected: Boolean = false,
+            val message: String = "Idle"
+        )
+
+        private val _serviceSnapshot = kotlinx.coroutines.flow.MutableStateFlow(ServiceSnapshot())
+        val serviceSnapshot: kotlinx.coroutines.flow.StateFlow<ServiceSnapshot> = _serviceSnapshot
+
+        private val _audioLevelFlow = kotlinx.coroutines.flow.MutableStateFlow(0f)
+        val audioLevelFlow: kotlinx.coroutines.flow.StateFlow<Float> = _audioLevelFlow
     }
 
     private val binder = LocalBinder()
@@ -161,14 +202,24 @@ class PhoneMicService : Service() {
         val p = paused
         val c = connected
         val m = stateMessage
+        _serviceSnapshot.value = ServiceSnapshot(r, p, c, m)
         mainHandler.post {
             for (listener in listeners) {
                 listener.onStateChanged(r, p, c, m)
             }
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                android.service.quicksettings.TileService.requestListeningState(
+                    this@PhoneMicService,
+                    android.content.ComponentName(this@PhoneMicService, PhoneMicTileService::class.java)
+                )
+            } catch (_: Exception) {}
+        }
     }
 
     private fun reportAudioLevel(level: Float, db: Float) {
+        _audioLevelFlow.value = level
         val now = SystemClock.uptimeMillis()
         if (now - lastLevelReportTime < 80) {
             return
@@ -229,6 +280,21 @@ class PhoneMicService : Service() {
             return START_NOT_STICKY
         }
 
+        if (ACTION_PAUSE == action) {
+            pauseStreaming()
+            return START_NOT_STICKY
+        }
+
+        if (ACTION_RESUME == action) {
+            resumeStreaming()
+            return START_NOT_STICKY
+        }
+
+        if (ACTION_TOGGLE_PAUSE == action) {
+            if (paused) resumeStreaming() else pauseStreaming()
+            return START_NOT_STICKY
+        }
+
         if (ACTION_START == action) {
             if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED
@@ -244,8 +310,10 @@ class PhoneMicService : Service() {
             val transport = intent.getStringExtra(EXTRA_TRANSPORT) ?: TRANSPORT_UDP
             val connection = intent.getStringExtra(EXTRA_CONNECTION) ?: CONNECTION_WIFI
             val mic = intent.getStringExtra(EXTRA_MIC) ?: MIC_STANDARD
+            val qualityStr = intent.getStringExtra(EXTRA_QUALITY) ?: QUALITY_STUDIO_48K
+            val quality = AudioQuality.fromId(qualityStr)
             gain = intent.getFloatExtra(EXTRA_GAIN, 1.0f).coerceIn(0.5f, 4.0f)
-            startStreaming(ip, port, transport, connection, mic)
+            startStreaming(ip, port, transport, connection, mic, quality)
         }
 
         return START_NOT_STICKY
@@ -276,6 +344,7 @@ class PhoneMicService : Service() {
     // STREAM CONTROL
     // ========================================================
 
+    private var currentQuality = AudioQuality.STUDIO_48K
     private var actualSampleRate = SAMPLE_RATE
     private var needsResampling44k = false
 
@@ -295,14 +364,19 @@ class PhoneMicService : Service() {
         }
     }
 
-    private fun createAudioRecorder(requestedSource: Int): AudioRecord? {
-        val sampleRates = intArrayOf(48000, 44100)
+    private fun createAudioRecorder(requestedSource: Int, targetRate: Int): AudioRecord? {
+        val sampleRates = when (targetRate) {
+            16000 -> intArrayOf(16000, 48000)
+            24000 -> intArrayOf(24000, 16000, 48000)
+            else -> intArrayOf(48000, 44100)
+        }
         val sourcesToTry = intArrayOf(
             requestedSource,
             MediaRecorder.AudioSource.MIC,
             MediaRecorder.AudioSource.DEFAULT
         ).distinct().toIntArray()
 
+        val packetBytes = currentQuality.packetSize
         for (rate in sampleRates) {
             val minBuffer = AudioRecord.getMinBufferSize(
                 rate,
@@ -311,7 +385,7 @@ class PhoneMicService : Service() {
             )
             if (minBuffer <= 0) continue
 
-            val bufferSize = max(minBuffer * 2, PACKET_SIZE * 4)
+            val bufferSize = max(minBuffer * 2, packetBytes * 4)
 
             for (source in sourcesToTry) {
                 try {
@@ -337,6 +411,7 @@ class PhoneMicService : Service() {
         }
         return null
     }
+
 
     private fun resample441To480(src: ByteArray, dst: ByteArray) {
         // src has 441 16-bit samples (882 bytes), dst has 480 16-bit samples (960 bytes)
@@ -375,9 +450,12 @@ class PhoneMicService : Service() {
         port: Int,
         transport: String,
         connection: String,
-        micMode: String
+        micMode: String,
+        quality: AudioQuality = AudioQuality.STUDIO_48K
     ) {
         if (running) return
+
+        currentQuality = quality
 
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
@@ -393,7 +471,7 @@ class PhoneMicService : Service() {
         stopRequested = false
 
         val micSource = resolveMicSource(micMode)
-        recorder = createAudioRecorder(micSource)
+        recorder = createAudioRecorder(micSource, quality.sampleRate)
 
         val rec = recorder
         if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) {
@@ -603,9 +681,10 @@ class PhoneMicService : Service() {
             ctrlThread.isDaemon = true
             ctrlThread.start()
 
+            val packetSize = currentQuality.packetSize
             val raw44k = if (needsResampling44k) ByteArray(882) else ByteArray(0)
-            val data = ByteArray(PACKET_SIZE)
-            val silence = ByteArray(PACKET_SIZE)
+            val data = ByteArray(packetSize)
+            val silence = ByteArray(packetSize)
             var packetsInWindow = 0
             var windowStart = SystemClock.uptimeMillis()
             var consecutiveSilence = 0
@@ -758,10 +837,11 @@ class PhoneMicService : Service() {
             ctrlThread.isDaemon = true
             ctrlThread.start()
 
+            val packetSize = currentQuality.packetSize
             val raw44k = if (needsResampling44k) ByteArray(882) else ByteArray(0)
-            val audio = ByteArray(PACKET_SIZE)
-            val packet = ByteArray(PACKET_SIZE + 8)
-            val silence = ByteArray(PACKET_SIZE)
+            val audio = ByteArray(packetSize)
+            val packet = ByteArray(packetSize + 8)
+            val silence = ByteArray(packetSize)
             var sequence = 0
             var packetsInWindow = 0
             var windowStart = SystemClock.uptimeMillis()
@@ -840,7 +920,7 @@ class PhoneMicService : Service() {
 
                 writeHeader(packet, sequence++)
                 System.arraycopy(audio, 0, packet, 8, read)
-                if (read < PACKET_SIZE) {
+                if (read < packetSize) {
                     Arrays.fill(packet, 8 + read, packet.size, 0.toByte())
                 }
                 if (socket.isClosed || stopRequested || !running) {
@@ -915,12 +995,12 @@ class PhoneMicService : Service() {
         } catch (_: InterruptedException) {}
     }
 
-    // Packet layout: 'P','M','0','1' + 4-byte big-endian sequence number
-    private fun writeHeader(packet: ByteArray, seq: Int) {
+    // Packet layout: 'P','M','0',tag + 4-byte big-endian sequence number
+    private fun writeHeader(packet: ByteArray, seq: Int, tag: Byte = currentQuality.magicTag) {
         packet[0] = 'P'.code.toByte()
         packet[1] = 'M'.code.toByte()
         packet[2] = '0'.code.toByte()
-        packet[3] = '1'.code.toByte()
+        packet[3] = tag
         ByteBuffer.wrap(packet, 4, 4)
             .order(ByteOrder.BIG_ENDIAN)
             .putInt(seq)
@@ -1004,6 +1084,18 @@ class PhoneMicService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val pauseResumeIntent = Intent(this, PhoneMicService::class.java).apply {
+            action = ACTION_TOGGLE_PAUSE
+        }
+        val pauseResumePendingIntent = PendingIntent.getService(
+            this,
+            2,
+            pauseResumeIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val pauseActionTitle = if (paused) getString(R.string.btn_resume) else getString(R.string.btn_pause)
+        val pauseActionIcon = if (paused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause
+
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
         } else {
@@ -1017,6 +1109,11 @@ class PhoneMicService : Service() {
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(openPendingIntent)
             .setOngoing(true)
+            .addAction(
+                pauseActionIcon,
+                pauseActionTitle,
+                pauseResumePendingIntent
+            )
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
                 getString(R.string.btn_stop),

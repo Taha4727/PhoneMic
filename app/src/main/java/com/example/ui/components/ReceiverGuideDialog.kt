@@ -3,7 +3,6 @@ package com.example.ui.components
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,6 +24,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -57,6 +57,7 @@ import com.example.ui.theme.StudioCard
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.util.ShareHelper
 
 @Composable
 fun ReceiverGuideDialog(
@@ -65,82 +66,18 @@ fun ReceiverGuideDialog(
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
 
-    val fullPythonScript = remember {
+    val quickScriptPreview = remember {
         """
-import os, sys, time, socket, struct, threading, queue, math, wave
-from datetime import datetime
-try:
-    import numpy as np, sounddevice as sd
-except ImportError:
-    print("[ERROR] Please run: pip install numpy sounddevice")
-    sys.exit(1)
-try:
-    import msvcrt
-except ImportError:
-    msvcrt = None
+# PhoneMic Standalone CLI Receiver v1.2.0
+# Zero GUI dependencies • Multi-Phone Mixing • Real-Time Monitoring
+# Run on PC / Mac / Linux:
+python phonemic_cli.py
 
-# PhoneMic Receiver v0.6.4 (Bidirectional Remote Control)
-VERSION = "0.6.4"
-PORT = 5001
-HOST = "0.0.0.0"
-RATE, CHANNELS, FRAMES = 48000, 1, 480
-TARGET_DEVICE = "CABLE Input"
-CMD_PAUSE, CMD_RESUME = b"PMP1", b"PMR1"
-
-def find_devices():
-    cable, default = None, sd.default.device[1]
-    for idx, dev in enumerate(sd.query_devices()):
-        if dev['max_output_channels'] > 0:
-            if TARGET_DEVICE.lower() in dev['name'].lower() and cable is None:
-                cable = (idx, dev)
-    return cable or (default, sd.query_devices(default))
-
-class Receiver:
-    def __init__(self, dev_idx):
-        self.dev_idx = dev_idx
-        self.running, self.paused, self.recording, self.monitoring = True, False, False, False
-        self.gain = 1.0
-        self.q = queue.Queue(maxsize=30)
-        self.pkts, self.lost, self.last_seq = 0, 0, -1
-        self.out = sd.OutputStream(samplerate=RATE, channels=2, dtype='float32', device=dev_idx, latency='low', blocksize=FRAMES)
-        self.out.start()
-        threading.Thread(target=self._play_loop, daemon=True).start()
-        threading.Thread(target=self._udp_loop, daemon=True).start()
-
-    def _play_loop(self):
-        silence = np.zeros((FRAMES, 2), dtype=np.float32)
-        while self.running:
-            try:
-                b = self.q.get(timeout=0.05)
-                self.out.write(silence if self.paused else b)
-            except: pass
-
-    def _udp_loop(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024*1024)
-        s.bind((HOST, PORT))
-        buf = bytearray(2048)
-        while self.running:
-            try:
-                n, addr = s.recvfrom_into(buf)
-                if buf[:4] == b"PMD0":
-                    s.sendto(b"PMA1 " + VERSION.encode(), addr)
-                elif buf[:4] == b"PM01" and n >= 8:
-                    seq = struct.unpack(">I", buf[4:8])[0]
-                    if self.last_seq != -1 and 1 < (seq - self.last_seq) < 5000:
-                        self.lost += (seq - self.last_seq - 1)
-                    self.last_seq = seq
-                    pcm = np.frombuffer(bytes(buf[8:n]), dtype=np.int16)
-                    flt = (pcm / 32768.0).astype(np.float32) * self.gain
-                    flt = np.clip(flt, -0.95, 0.95)
-                    st = np.column_stack((flt, flt))
-                    if self.q.full(): self.q.get_nowait()
-                    self.q.put_nowait(st)
-                    self.pkts += 1
-            except: pass
-
-print(f"PhoneMic Receiver v{VERSION} ready on port {PORT}. [P] Pause | [R] Record | [M] Monitor | [Q] Quit")
-""".trimIndent()
+# Keybindings in Terminal:
+# [M] Toggle Headphone Monitor  [X] Switch Mix Mode (Sum / Duck)
+# [P] Mute/Unmute Output        [+/-] Master Preamp Gain
+# [H] Detailed Device Telemetry [Q] Quit
+        """.trimIndent()
     }
 
     Dialog(onDismissRequest = onDismissRequest) {
@@ -167,7 +104,7 @@ print(f"PhoneMic Receiver v{VERSION} ready on port {PORT}. [P] Pause | [R] Recor
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                text = "WINDOWS RECEIVER 0.6.3",
+                                text = "PC RECEIVER SETUP",
                                 color = NeonCyan,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
@@ -175,7 +112,7 @@ print(f"PhoneMic Receiver v{VERSION} ready on port {PORT}. [P] Pause | [R] Recor
                             )
                         }
                         Text(
-                            text = "Ultra-low latency audio engine & launcher",
+                            text = "Windows GUI & Standalone CLI v1.2.0 Guide",
                             color = TextMuted,
                             fontSize = 11.sp
                         )
@@ -186,7 +123,7 @@ print(f"PhoneMic Receiver v{VERSION} ready on port {PORT}. [P] Pause | [R] Recor
                 }
 
                 // Tab Selector
-                val tabs = listOf("Quick Start", "Receiver Script", "PC Hotkeys", "VB-CABLE")
+                val tabs = listOf("Quick Start", "CLI Receiver", "Hotkeys", "Multi-Mic", "VB-CABLE")
                 TabRow(
                     selectedTabIndex = selectedTab,
                     containerColor = Color(0xFF0F1622),
@@ -206,7 +143,7 @@ print(f"PhoneMic Receiver v{VERSION} ready on port {PORT}. [P] Pause | [R] Recor
                             text = {
                                 Text(
                                     text = title,
-                                    fontSize = 11.sp,
+                                    fontSize = 10.5.sp,
                                     fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal,
                                     color = if (selectedTab == index) NeonCyan else TextSecondary
                                 )
@@ -217,9 +154,10 @@ print(f"PhoneMic Receiver v{VERSION} ready on port {PORT}. [P] Pause | [R] Recor
 
                 when (selectedTab) {
                     0 -> QuickStartTab()
-                    1 -> ScriptTab(context, fullPythonScript)
+                    1 -> CliScriptTab(context, quickScriptPreview)
                     2 -> HotkeysTab()
-                    3 -> VbCableTab()
+                    3 -> MultiMicTab()
+                    4 -> VbCableTab()
                 }
 
                 Button(
@@ -251,16 +189,16 @@ private fun QuickStartTab() {
                 .padding(12.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Step 1: One-Click Launch on PC", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                Text("In the windows_receiver folder, run either:", color = TextSecondary, fontSize = 11.sp)
+                Text("Step 1: Choose Your Receiver", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("You can run either the Full GUI receiver or the Lightweight CLI receiver on your computer:", color = TextSecondary, fontSize = 11.sp)
                 Text(
-                    text = "check_dependencies.bat  (or start_receiver.bat)",
+                    text = "A) GUI App: Run start_receiver.bat in windows_receiver\nB) CLI App: python phonemic_cli.py",
                     fontFamily = FontFamily.Monospace,
                     color = NeonCyan,
-                    fontSize = 12.sp,
+                    fontSize = 11.5.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Text("Tip: Double-click build_exe.bat to package everything into a standalone PhoneMicReceiver.exe!", color = Color(0xFF38BDF8), fontSize = 10.5.sp)
+                Text("Tip: Double-click build_exe.bat to package everything into a single standalone PhoneMicReceiver.exe!", color = Color(0xFF38BDF8), fontSize = 10.5.sp)
             }
         }
 
@@ -272,14 +210,14 @@ private fun QuickStartTab() {
                 .padding(12.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Step 2: Manual Command (Optional)", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                Text("Or open PowerShell / Command Prompt and run:", color = TextSecondary, fontSize = 11.sp)
+                Text("Step 2: Connect from Phone", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    text = "python phonemic_receiver.py",
-                    fontFamily = FontFamily.Monospace,
-                    color = NeonCyan,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
+                    text = "1. Ensure phone & PC are on the same Wi-Fi (or USB Tethering).\n" +
+                           "2. Tap 'AUTO-DETECT PC' or scan the QR Code on the receiver.\n" +
+                           "3. Tap 'START STREAMING' to broadcast crystal-clear audio!",
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
                 )
             }
         }
@@ -292,9 +230,9 @@ private fun QuickStartTab() {
                 .padding(12.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Step 3: Connect from Phone", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("Step 3: Route to Discord / OBS / Games", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    text = "Tap 'AUTO-DETECT PC RECEIVER' in the app. The phone broadcasts 'PMD0' query and automatically fills your PC IP address. Then tap START STREAM!",
+                    text = "Select 'CABLE Output (VB-Audio Virtual Cable)' as your Microphone in Discord, Zoom, OBS, or Steam voice settings.",
                     color = TextSecondary,
                     fontSize = 11.sp,
                     lineHeight = 15.sp
@@ -305,12 +243,19 @@ private fun QuickStartTab() {
 }
 
 @Composable
-private fun ScriptTab(context: Context, scriptText: String) {
+private fun CliScriptTab(context: Context, scriptPreview: String) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            text = "Official PhoneMic Receiver v0.6.3 (supports UDP/TCP, Remote Pause Sync, Discovery PMD0, Noise Gate, Limiter & WAV recording):",
+            text = "Lightweight Standalone Receiver (phonemic_cli.py):",
+            color = TextPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = "No GUI dependencies. Supports multiple phones mixed simultaneously, real-time headphone monitoring ('M' key), auto-ducking, and live ANSI volume meters.",
             color = TextSecondary,
-            fontSize = 11.sp
+            fontSize = 11.sp,
+            lineHeight = 15.sp
         )
 
         Box(
@@ -321,7 +266,7 @@ private fun ScriptTab(context: Context, scriptText: String) {
                 .padding(10.dp)
         ) {
             Text(
-                text = scriptText,
+                text = scriptPreview,
                 fontFamily = FontFamily.Monospace,
                 color = Color(0xFF7DD3FC),
                 fontSize = 10.sp,
@@ -336,8 +281,8 @@ private fun ScriptTab(context: Context, scriptText: String) {
             OutlinedButton(
                 onClick = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText("PhoneMic Receiver Script", scriptText))
-                    Toast.makeText(context, "Copied script to clipboard!", Toast.LENGTH_SHORT).show()
+                    clipboard.setPrimaryClip(ClipData.newPlainText("PhoneMic Run Command", "python phonemic_cli.py"))
+                    Toast.makeText(context, "Copied run command to clipboard!", Toast.LENGTH_SHORT).show()
                 },
                 modifier = Modifier
                     .weight(1f)
@@ -347,19 +292,12 @@ private fun ScriptTab(context: Context, scriptText: String) {
             ) {
                 Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Copy Script", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("Copy Command", fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
 
             Button(
                 onClick = {
-                    val sendIntent = Intent().apply {
-                        action = Intent.ACTION_SEND
-                        putExtra(Intent.EXTRA_TEXT, scriptText)
-                        putExtra(Intent.EXTRA_TITLE, "phonemic_receiver.py")
-                        type = "text/plain"
-                    }
-                    val shareIntent = Intent.createChooser(sendIntent, "Share phonemic_receiver.py")
-                    context.startActivity(shareIntent)
+                    ShareHelper.shareCliReceiver(context)
                 },
                 modifier = Modifier
                     .weight(1f)
@@ -372,7 +310,7 @@ private fun ScriptTab(context: Context, scriptText: String) {
             ) {
                 Icon(imageVector = Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Share / Send to PC", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("Share Script to PC", fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -382,16 +320,64 @@ private fun ScriptTab(context: Context, scriptText: String) {
 private fun HotkeysTab() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            text = "While the receiver script is running on your PC, press these keyboard keys inside the console window:",
+            text = "While running either the CLI receiver or GUI receiver, use these interactive keys:",
             color = TextSecondary,
             fontSize = 11.5.sp
         )
 
-        HotkeyItem(key = "P", action = "Toggle Pause / Resume (Remote Sync)", detail = "Silences audio immediately and remotely pauses/resumes microphone capture on the phone.")
-        HotkeyItem(key = "R", action = "Toggle WAV Recording", detail = "Records 48 kHz stereo audio directly to PhoneMic_YYYYMMDD_HHMMSS.wav in script folder.")
-        HotkeyItem(key = "M", action = "Toggle Speaker Monitor", detail = "Plays microphone audio through your PC speakers/headphones to test clarity.")
-        HotkeyItem(key = "+/-", action = "Adjust Gain Boost", detail = "Quickly steps the digital preamp gain up or down in 0.5x increments.")
-        HotkeyItem(key = "Q", action = "Quit Receiver", detail = "Safely releases audio device and closes network socket.")
+        HotkeyItem(key = "M", action = "Toggle Headphone Monitoring", detail = "Directly routes microphone audio into your headphones so you can hear yourself without lag.")
+        HotkeyItem(key = "X", action = "Switch Mix Mode (Sum / Duck)", detail = "Toggles between Sum & Soft Limiter (all mics equal) and Auto-Duck Priority (ducks others by 75%).")
+        HotkeyItem(key = "P", action = "Toggle Mute / Output Pause", detail = "Silences all audio output immediately without stopping connection sockets.")
+        HotkeyItem(key = "+/-", action = "Preamp Gain Boost / Cut", detail = "Steps master digital volume in 1 dB increments (up to +18 dB or down to -24 dB).")
+        HotkeyItem(key = "0", action = "Reset Master Gain", detail = "Quickly resets digital gain to unity (0.0 dB).")
+        HotkeyItem(key = "H", action = "Toggle Detailed Telemetry", detail = "Shows/hides bit-rate (kbps), jitter buffer depth (ms), and packet loss per device.")
+        HotkeyItem(key = "Q", action = "Quit Receiver", detail = "Safely closes PortAudio streams, cleans memory buffers, and exits.")
+    }
+}
+
+@Composable
+private fun MultiMicTab() {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0C131D), RoundedCornerShape(10.dp))
+                .border(1.dp, Color(0xFF1E2838), RoundedCornerShape(10.dp))
+                .padding(12.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Multi-Device Simultaneous Connection", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = "You can connect 2, 3, or more phones to the receiver simultaneously!",
+                    color = NeonCyan,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "• All phones use the exact same PC IP address and port (default 5001).\n" +
+                           "• The receiver automatically identifies each phone and mixes their voices in real time.\n" +
+                           "• Different audio qualities (48k, 24k, 16k) are seamlessly upsampled and aligned.\n" +
+                           "• Built-in tanh soft limiter prevents digital clipping when multiple people speak at once.",
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0C131D), RoundedCornerShape(10.dp))
+                .border(1.dp, Color(0xFF1E2838), RoundedCornerShape(10.dp))
+                .padding(12.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Mixing Profiles", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("1. Sum & Soft Limiter: Perfect for group podcasts or gaming teams where everyone has an equal voice.", color = TextSecondary, fontSize = 10.5.sp)
+                Text("2. Auto-Duck Priority: Detects the primary active speaker and attenuates background chatter from other phones by 75%.", color = TextSecondary, fontSize = 10.5.sp)
+            }
+        }
     }
 }
 
@@ -408,7 +394,7 @@ private fun HotkeyItem(key: String, action: String, detail: String) {
     ) {
         Box(
             modifier = Modifier
-                .size(32.dp)
+                .size(34.dp)
                 .background(Color(0xFF1A2638), RoundedCornerShape(6.dp))
                 .border(1.dp, NeonCyan.copy(alpha = 0.5f), RoundedCornerShape(6.dp)),
             contentAlignment = Alignment.Center
@@ -418,7 +404,7 @@ private fun HotkeyItem(key: String, action: String, detail: String) {
                 color = NeonCyan,
                 fontWeight = FontWeight.ExtraBold,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp
+                fontSize = 12.sp
             )
         }
         Column(modifier = Modifier.weight(1f)) {
@@ -445,8 +431,8 @@ private fun VbCableTab() {
                 }
                 Text(
                     text = "1. Download and install free VB-CABLE driver from vb-audio.com.\n" +
-                           "2. In Windows Sound Settings, set VB-CABLE sample rate to 48000 Hz 16-bit or 24-bit.\n" +
-                           "3. The receiver script automatically detects 'CABLE Input (VB-Audio Virtual Cable)' via WASAPI.\n" +
+                           "2. In Windows Sound Settings, set VB-CABLE sample rate to 48000 Hz (16-bit or 24-bit).\n" +
+                           "3. The PhoneMic receiver automatically routes audio to 'CABLE Input' via WASAPI.\n" +
                            "4. In Discord, Zoom, OBS, or Games: select 'CABLE Output' as your Input Microphone Device!",
                     color = TextSecondary,
                     fontSize = 11.sp,

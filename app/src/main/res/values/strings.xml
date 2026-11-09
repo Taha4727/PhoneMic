@@ -41,6 +41,23 @@
     <string name="hint_mic_loud">Standard Raw Mic (Unprocessed input)</string>
     <string name="hint_mic_camcorder">Camcorder Mic (Wide dynamic range for ambient / room)</string>
 
+    <string name="tile_name">PhoneMic Mute</string>
+    <string name="tile_streaming">PhoneMic (Live)</string>
+    <string name="tile_muted">PhoneMic (Muted)</string>
+    <string name="tile_off">PhoneMic (Off)</string>
+
+    <string name="btn_scan_qr">Scan PC QR</string>
+    <string name="qr_scanner_title">Scan PC Receiver QR</string>
+    <string name="qr_scanner_hint">Point your camera at the QR code shown on the Windows Receiver screen</string>
+    <string name="qr_scanned_success">Connected to %1$s:%2$s</string>
+    <string name="qr_invalid">Invalid PhoneMic QR code</string>
+
+    <string name="floating_overlay_title">Floating Mute Pill</string>
+    <string name="floating_overlay_desc">Show draggable on-screen mic widget over full-screen games</string>
+    <string name="overlay_permission_title">Overlay Permission Needed</string>
+    <string name="overlay_permission_desc">To display the floating mute button over games and other apps, please allow \'Display over other apps\' in system settings.</string>
+    <string name="overlay_permission_btn">Grant Overlay Access</string>
+
     <string-array name="connection_options">
         <item>Wi-Fi</item>
         <item>USB</item>

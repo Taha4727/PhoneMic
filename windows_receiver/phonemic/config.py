@@ -20,12 +20,14 @@ DEFAULTS = {
         "active_preset": "Normal (Bypass)",
         "mode": "Natural Pitch",
         "pitch_semitones": 0.0,
+        "formant_semitones": 0.0,
         "mix": 1.0,
     },
     "network": {
         "port": DEFAULT_PORT,
         "beacon": True,              # broadcast presence so the phone can auto-detect the PC
-        "lock_client": True,         # ignore other phones while one is streaming
+        "lock_client": False,        # allow multiple phones to connect and mix simultaneously (can be toggled in settings)
+        "mix_mode": "sum",           # "sum" (Sum & Soft Limiter) | "duck" (Auto-Duck Priority)
         "accept_raw": True,          # accept header-less PCM datagrams
         "stream_timeout_s": 1.5,     # silence for this long = "connection lost"
     },

@@ -58,16 +58,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.compose.material.icons.filled.Share
 import com.example.DeviceProfile
 import com.example.PhoneMicViewModel
+import com.example.ui.components.AudioQualitySelector
 import com.example.ui.components.BatteryOptimizationBanner
+import com.example.ui.components.FloatingOverlayControl
 import com.example.ui.components.GainBoostControl
 import com.example.ui.components.HeroMicControl
 import com.example.ui.components.MicrophonePermissionBanner
 import com.example.ui.components.NetworkConfigSection
+import com.example.ui.components.QrScannerDialog
 import com.example.ui.components.ReceiverGuideDialog
 import com.example.ui.components.ScreenAwakeControl
 import com.example.ui.components.StreamTelemetryCard
+import com.example.util.ShareHelper
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.StreamActiveGreen
 import com.example.ui.theme.StreamErrorRed
@@ -112,6 +117,17 @@ fun PhoneMicScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ ->
         viewModel.checkPermissions(context)
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        viewModel.checkPermissions(context)
+        if (isGranted) {
+            viewModel.setQrScannerVisible(true)
+        } else {
+            Toast.makeText(context, "Camera permission needed to scan PC QR code", Toast.LENGTH_SHORT).show()
+        }
     }
 
     fun handleStartStream() {
@@ -257,6 +273,20 @@ fun PhoneMicScreen(
                                     )
                                 }
                             }
+                        }
+
+                        IconButton(
+                            onClick = { ShareHelper.shareCliReceiver(context) },
+                            modifier = Modifier
+                                .size(32.dp)
+                                .testTag("share_receiver_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Share CLI Receiver",
+                                tint = NeonCyan,
+                                modifier = Modifier.size(17.dp)
+                            )
                         }
 
                         IconButton(
@@ -410,7 +440,13 @@ fun PhoneMicScreen(
                                 onKeepAwakeChange = { viewModel.setKeepScreenAwake(it) }
                             )
 
-                            // 3. TARGET PC RECEIVER (IP, Port, Auto-Detect PC, Wi-Fi vs USB toggle, Direct USB tethering button)
+                            // 3. Floating Mute Pill Overlay (Draggable overlay over games & other apps)
+                            FloatingOverlayControl(
+                                isEnabled = uiState.isOverlayEnabled,
+                                onToggle = { viewModel.toggleFloatingOverlay(context, it) }
+                            )
+
+                            // 4. TARGET PC RECEIVER (IP, Port, Auto-Detect PC, Scan PC QR, Wi-Fi vs USB toggle, Direct USB tethering button)
                             NetworkConfigSection(
                                 ip = uiState.ip,
                                 port = uiState.port,
@@ -422,19 +458,37 @@ fun PhoneMicScreen(
                                 onIpChange = { viewModel.setIp(it) },
                                 onPortChange = { viewModel.setPort(it) },
                                 onScanClick = { viewModel.scanForPc(context) },
+                                onScanQrClick = {
+                                    val hasCam = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.CAMERA
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (hasCam) {
+                                        viewModel.setQrScannerVisible(true)
+                                    } else {
+                                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                    }
+                                },
                                 connectionMode = uiState.connectionMode,
                                 transportMode = uiState.transportMode,
                                 onConnectionModeChange = { viewModel.setConnectionMode(it) },
                                 onTransportModeChange = { viewModel.setTransportMode(it) }
                             )
 
-                            // 4. ACCURATE GAIN BOOST & MIC PROFILE (Clean 0.1x steps, +/- buttons, presets)
+                            // 5. ACCURATE GAIN BOOST & MIC PROFILE (Clean 0.1x steps, +/- buttons, presets)
                             GainBoostControl(
                                 micMode = uiState.micMode,
                                 gain = uiState.gain,
                                 isEnabled = !uiState.isRunning,
                                 onMicModeChange = { viewModel.setMicMode(it) },
                                 onGainChange = { viewModel.setGain(it) }
+                            )
+
+                            // 6. LOW BANDWIDTH & AUDIO QUALITY SELECTOR (48kHz, 24kHz, 16kHz)
+                            AudioQualitySelector(
+                                selectedQuality = uiState.audioQuality,
+                                isEnabled = !uiState.isRunning,
+                                onQualitySelected = { viewModel.setAudioQuality(it) }
                             )
                         }
 
@@ -538,6 +592,20 @@ fun PhoneMicScreen(
             },
             containerColor = Color(0xFF141F2E),
             shape = RoundedCornerShape(14.dp)
+        )
+    }
+
+    if (uiState.showQrScanner) {
+        QrScannerDialog(
+            onDismiss = { viewModel.setQrScannerVisible(false) },
+            onConfigScanned = { config ->
+                viewModel.applyScannedConfig(config)
+                Toast.makeText(
+                    context,
+                    "Paired with ${config.ip}:${config.port} via QR",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         )
     }
 }

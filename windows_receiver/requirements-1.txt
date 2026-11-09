@@ -1,7 +1,0 @@
-numpy>=1.24
-sounddevice>=0.4.6
-# Tray icon (optional: the app works without them)
-pystray>=0.19
-pillow>=10.0
-# Only needed to build the .exe:
-# pyinstaller>=6.0

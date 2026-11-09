@@ -5,7 +5,10 @@ APP_NAME = "PhoneMic Receiver"
 
 # --- Network / wire protocol (must match PhoneMicService.kt) -----------------
 DEFAULT_PORT = 5001
-PACKET_MAGIC = b"PM01"            # 'PM01' + uint32 big-endian seq + 16-bit LE mono PCM
+PACKET_MAGIC = b"PM01"            # 'PM01' + uint32 big-endian seq + 16-bit LE mono PCM (48 kHz)
+PACKET_MAGIC_48K = b"PM01"
+PACKET_MAGIC_24K = b"PM02"        # 24 kHz Balanced (240 samples = 480 bytes)
+PACKET_MAGIC_16K = b"PM03"        # 16 kHz Low-Bandwidth (160 samples = 320 bytes)
 DISCOVERY_PROBE = b"PM_DISCOVER"
 DISCOVERY_REPLY = b"PMA1"         # reply / beacon: b"PMA1 <version> <ip>"
 CMD_PAUSE = b"PMP1"

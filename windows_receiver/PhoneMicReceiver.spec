@@ -21,7 +21,7 @@ hiddenimports = [
     "phonemic", "phonemic.const", "phonemic.config", "phonemic.system", "phonemic.dsp", "phonemic.engine",
     "phonemic.widgets", "phonemic.ui_kit", "phonemic.gui", "phonemic.pages", "phonemic.wizard", "phonemic.cli", "phonemic.icon",
     "phonemic.bindings", "phonemic.settings_meta", "phonemic.presets_io", "phonemic.hotkeys", "phonemic.tray", "phonemic.cues",
-    "phonemic.selftest",
+    "phonemic.selftest", "phonemic.qr", "phonemic.qrcodegen",
 ]
 
 # PortAudio DLL + sounddevice package data
