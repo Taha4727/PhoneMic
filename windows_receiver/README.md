@@ -1,3 +1,7 @@
+> [!NOTE]
+> **🤖 100% Made With AI**  
+> This entire receiver engine, GUI, DSP chain, and CLI tool were authored using Artificial Intelligence.
+
 # PhoneMic Windows Receiver v0.11.0
 
 Turn your Android phone into a low-latency PC microphone over **Wi-Fi** or **USB tethering**.

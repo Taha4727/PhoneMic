@@ -1,10 +1,20 @@
-name: Automated Release (APK & Windows Receiver)
+name: Manual Release (APK & Windows Receiver)
 
 on:
-  push:
-    branches: [ "main", "master" ]
-    tags: [ "v*" ]
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag Name (e.g. v1.2.0)'
+        required: true
+        default: 'v1.2.0'
+      release_title:
+        description: 'Release Title'
+        required: false
+        default: 'PhoneMic Release'
+      is_draft:
+        description: 'Create as Draft Release'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -62,7 +72,7 @@ jobs:
         with:
           name: PhoneMic-debug-apk
           path: release_assets/PhoneMic-debug.apk
-          retention-days: 14
+          retention-days: 7
 
   # ---------------------------------------------------------------------------
   # 2. Build Windows Receiver EXE & CLI Bundle
@@ -103,10 +113,10 @@ jobs:
         with:
           name: PhoneMicReceiver-Windows
           path: release_assets/PhoneMicReceiver-Windows.zip
-          retention-days: 14
+          retention-days: 7
 
   # ---------------------------------------------------------------------------
-  # 3. Publish Unified GitHub Release
+  # 3. Publish Manual GitHub Release
   # ---------------------------------------------------------------------------
   publish-release:
     name: Publish Release (APK + Windows)
@@ -126,43 +136,27 @@ jobs:
           name: PhoneMicReceiver-Windows
           path: release_files
 
-      - name: Determine Release Tag
-        id: release_info
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
-            TITLE="PhoneMic ${TAG_NAME}"
-            PRERELEASE=false
-          else
-            TAG_NAME="latest"
-            TITLE="PhoneMic Latest Build ($(date +'%Y-%m-%d %H:%M'))"
-            PRERELEASE=false
-          fi
-          echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
-          echo "title=${TITLE}" >> $GITHUB_OUTPUT
-          echo "prerelease=${PRERELEASE}" >> $GITHUB_OUTPUT
-
-      - name: Create or Update GitHub Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_info.outputs.tag }}
-          name: ${{ steps.release_info.outputs.title }}
-          draft: false
-          prerelease: ${{ steps.release_info.outputs.prerelease == 'true' }}
+          tag_name: ${{ github.event.inputs.tag_name }}
+          name: ${{ github.event.inputs.release_title || github.event.inputs.tag_name }}
+          draft: ${{ github.event.inputs.is_draft == 'true' }}
+          prerelease: false
           files: |
             release_files/PhoneMic-debug.apk
             release_files/PhoneMicReceiver-Windows.zip
           generate_release_notes: true
           body: |
-            ## PhoneMic Automatic Release
+            ## PhoneMic Release ${{ github.event.inputs.tag_name }}
 
-            This release contains the latest compiled binaries for both Android and Windows:
+            Download the pre-compiled binaries below:
 
-            ### 📱 Android
+            ### 📱 Android Application
             * **`PhoneMic-debug.apk`**: Install on your Android phone to stream microphone audio over Wi-Fi or USB tethering. Supports Studio (48 kHz), Balanced (24 kHz), and Economy (16 kHz) audio profiles.
 
-            ### 💻 Windows & Cross-Platform PC
+            ### 💻 Windows & Cross-Platform PC Receiver
             * **`PhoneMicReceiver-Windows.zip`**: Includes:
-              * **`PhoneMicReceiver.exe`**: Full Windows GUI with live signal chain (EQ, Noise Gate, Compressor, Voice Changer, Limiter).
+              * **`PhoneMicReceiver.exe`**: Full Windows GUI with real-time signal processing (EQ, Noise Gate, Compressor, Voice Changer, Limiter).
               * **`phonemic_cli.py`**: Lightweight standalone CLI receiver with live terminal VU meters, multi-phone mixing, and real-time headphone monitoring (`M` key).
-              * **`fix_firewall.bat`**: One-click Windows firewall rule configuration for USB tethering and Wi-Fi streaming.
+              * **`fix_firewall.bat`**: One-click Windows firewall configuration for USB tethering and Wi-Fi streaming.

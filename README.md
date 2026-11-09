@@ -1,3 +1,7 @@
+> [!NOTE]
+> **🤖 100% Made With AI**  
+> PhoneMic is an experimental open-source project generated and engineered from scratch using Artificial Intelligence (Google AI Studio Build). Every line of code across both the Android application (Kotlin/Jetpack Compose) and the Windows/cross-platform PC audio engines (Python/Tkinter/CFFI) was authored by AI.
+
 # PhoneMic 🎙️
 
 **PhoneMic** turns one or more Android phones into ultra-low-latency studio microphones for your PC over **Wi-Fi** or **USB Tethering**.
@@ -112,21 +116,24 @@ python phonemic_cli.py --mix-mode duck
 
 ---
 
-## 📦 Releases & GitHub Actions CI
+## 📦 Releases & GitHub Actions (Manual Trigger)
 
-Every push or release tag triggers automated GitHub Actions builds:
+Releases are triggered **manually on-demand** from GitHub Actions:
 
-1. **Android APK**: Compiled with Gradle (`artifacts/PhoneMic-debug.apk`).
-2. **Windows Receiver ZIP**: Built with PyInstaller and packaged into `PhoneMicReceiver-Windows.zip` containing:
+1. **Android APK**: Compiled with Gradle (`PhoneMic-debug.apk`).
+2. **Windows Receiver ZIP**: Built with PyInstaller (`PhoneMicReceiver-Windows.zip`) containing:
    * `PhoneMicReceiver.exe` (Standalone GUI)
    * `phonemic_cli.py` (Standalone CLI)
    * `fix_firewall.bat`
    * Documentation
 
-### How to Release a New Version:
-1. In Google AI Studio, click **Settings -> Push to GitHub**.
-2. In your GitHub repository, create a new tag and release (e.g., `v1.2.0`).
-3. GitHub Actions CI will automatically attach the compiled APK and Windows bundle to your release page!
+### How to Create a Release:
+1. In your GitHub repository, go to the **Actions** tab.
+2. Select **"Manual Release (APK & Windows Receiver)"** from the left sidebar.
+3. Click **"Run workflow"**.
+4. (Optional) Enter your desired release tag (e.g. `v1.2.0`) and title.
+5. Click the green **"Run workflow"** button.
+6. GitHub will build both the Android APK and Windows bundle and publish them directly to your repository's **Releases** page!
 
 ---
 

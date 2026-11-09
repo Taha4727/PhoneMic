@@ -520,12 +520,12 @@ fun PhoneMicScreen(
                             ) {
                                 Icon(Icons.Default.HelpOutline, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Open Receiver Guide & Python Script (v0.6.3)", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                Text("Open Receiver Guide & Setup", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                             }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
             }
         }
