@@ -35,6 +35,7 @@ jobs:
       - name: Package Windows Receiver ZIP
         run: |
           Copy-Item windows_receiver/fix_firewall.bat windows_receiver/dist/
+          Copy-Item windows_receiver/phonemic_cli.py windows_receiver/dist/
           Copy-Item windows_receiver/README.md windows_receiver/dist/
           Compress-Archive -Path windows_receiver/dist/* -DestinationPath PhoneMicReceiver-Windows.zip -Force
 
