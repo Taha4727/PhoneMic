@@ -556,7 +556,9 @@ fun parsePhoneMicQrPayload(raw: String): ScannedReceiverConfig? {
         if (trimmed.startsWith("phonemic://", ignoreCase = true)) {
             val uri = URI(trimmed)
             val host = uri.host ?: return null
+            if (!isValidIpv4(host)) return null
             val port = if (uri.port > 0) uri.port else 5001
+            if (port !in 1..65535) return null
             val query = uri.query ?: ""
             var transport = "UDP"
             for (param in query.split("&")) {
@@ -573,18 +575,30 @@ fun parsePhoneMicQrPayload(raw: String): ScannedReceiverConfig? {
         // Alternative formats: 192.168.1.50:5001
         if (trimmed.contains(":")) {
             val parts = trimmed.split(":")
-            if (parts.size == 2 && parts[0].matches(Regex("^(\\d{1,3}\\.){3}\\d{1,3}$"))) {
-                val port = parts[1].toIntOrNull() ?: 5001
-                return ScannedReceiverConfig(parts[0], port, "UDP")
+            if (parts.size == 2 && isValidIpv4(parts[0])) {
+                val port = parts[1].toIntOrNull()
+                if (port != null && port in 1..65535) {
+                    return ScannedReceiverConfig(parts[0], port, "UDP")
+                }
             }
         }
 
         // Just IP: 192.168.1.50
-        if (trimmed.matches(Regex("^(\\d{1,3}\\.){3}\\d{1,3}$"))) {
+        if (isValidIpv4(trimmed)) {
             return ScannedReceiverConfig(trimmed, 5001, "UDP")
         }
     } catch (e: Exception) {
         Log.w("QrScanner", "Invalid QR payload: $raw", e)
     }
     return null
+}
+
+private fun isValidIpv4(ip: String): Boolean {
+    val parts = ip.split(".")
+    if (parts.size != 4) return false
+    for (p in parts) {
+        val num = p.toIntOrNull() ?: return false
+        if (num !in 0..255) return false
+    }
+    return true
 }

@@ -149,31 +149,39 @@ object ReceiverDiscovery {
                                 val host = sender.hostAddress ?: ""
                                 // Extract embedded IP in reply if provided: "PMA1 0.6.5 192.168.42.129"
                                 val parts = text.split(" ")
-                                val embeddedIp = if (parts.size >= 3 && parts[2].matches(Regex("^(\\d{1,3}\\.){3}\\d{1,3}$"))) {
+                                val candidateIp = if (parts.size >= 3 && parts[2].matches(Regex("^(\\d{1,3}\\.){3}\\d{1,3}$"))) {
                                     parts[2]
+                                } else {
+                                    null
+                                }
+                                // Ignore loopback, broadcast, or zero IP candidates
+                                val embeddedIp = if (candidateIp != null &&
+                                    !candidateIp.startsWith("127.") &&
+                                    candidateIp != "0.0.0.0" &&
+                                    candidateIp != "255.255.255.255"
+                                ) {
+                                    candidateIp
                                 } else {
                                     null
                                 }
 
                                 val chosenIp: String = if (preferUsb) {
                                     // In USB mode: Prioritize the USB network interface (192.168.42.x or 192.168.137.x).
-                                    // Never allow a Wi-Fi IP (e.g. 192.168.1.x) to hijack USB mode.
                                     if (host.startsWith("192.168.42.") || host.startsWith("192.168.137.")) {
                                         host
                                     } else if (embeddedIp != null && (embeddedIp.startsWith("192.168.42.") || embeddedIp.startsWith("192.168.137."))) {
                                         embeddedIp
                                     } else {
-                                        // If reply arrived over USB link but host reports something else, socket sender address is real
                                         host.ifEmpty { embeddedIp ?: "" }
                                     }
                                 } else {
-                                    // In Wi-Fi mode: Prefer embedded IP or sender IP, avoiding USB tether subnets
-                                    if (embeddedIp != null && !embeddedIp.startsWith("192.168.42.")) {
-                                        embeddedIp
-                                    } else if (!host.startsWith("192.168.42.")) {
+                                    // In Wi-Fi mode: Prefer real packet sender IP, or valid non-USB embedded IP
+                                    if (host.isNotBlank() && !host.startsWith("127.") && !host.startsWith("192.168.42.")) {
                                         host
+                                    } else if (embeddedIp != null && !embeddedIp.startsWith("192.168.42.")) {
+                                        embeddedIp
                                     } else {
-                                        embeddedIp ?: host
+                                        host.ifEmpty { embeddedIp ?: "" }
                                     }
                                 }
 

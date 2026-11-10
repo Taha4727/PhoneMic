@@ -33,11 +33,11 @@ object ShareHelper {
                 )
                 putExtra(
                     Intent.EXTRA_TEXT,
-                    "PhoneMic Standalone CLI Receiver v1.1.0\n\n" +
+                    "PhoneMic Standalone CLI Receiver v${com.example.BuildConfig.VERSION_NAME}\n\n" +
                     "Run with:\n" +
                     "  pip install numpy sounddevice\n" +
                     "  python phonemic_cli.py\n\n" +
-                    "Supports multi-device mixing, 48kHz / 24kHz / 16kHz low-bandwidth streams."
+                    "Supports multi-device mixing, real-time headphone monitoring ('M' key), and low-bandwidth profiles."
                 )
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }

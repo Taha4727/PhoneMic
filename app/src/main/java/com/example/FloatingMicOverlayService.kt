@@ -135,6 +135,10 @@ class FloatingMicOverlayService : Service() {
             this.layoutParams = LinearLayout.LayoutParams(dp(16f), dp(16f))
             setColorFilter(0xFF8B949E.toInt())
             setOnClickListener {
+                try {
+                    val prefs = getSharedPreferences("phone_mic_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putBoolean("pref_overlay_enabled", false).apply()
+                } catch (_: Exception) {}
                 stopSelf()
             }
         }
@@ -175,7 +179,9 @@ class FloatingMicOverlayService : Service() {
                         val toggleIntent = Intent(this, PhoneMicService::class.java).apply {
                             action = PhoneMicService.ACTION_TOGGLE_PAUSE
                         }
-                        startService(toggleIntent)
+                        try {
+                            androidx.core.content.ContextCompat.startForegroundService(this, toggleIntent)
+                        } catch (_: Exception) {}
                     }
                     true
                 }

@@ -569,6 +569,10 @@ class Recorder:
             self.dropped += 1
 
     def _writer(self, wf, q):
+        part = 1
+        base_path = self.path
+        MAX_FRAMES_PER_FILE = 950_000_000  # ~1.9 GB in 16-bit mono PCM (under 2GB / 4GB limit)
+        part_frames = 0
         try:
             while True:
                 blk = q.get()
@@ -577,6 +581,24 @@ class Recorder:
                 pcm = (np.clip(blk, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
                 wf.writeframes(pcm)
                 self.frames += len(blk)
+                part_frames += len(blk)
+
+                # Rollover before hitting 2GB boundary
+                if part_frames >= MAX_FRAMES_PER_FILE:
+                    try:
+                        wf.close()
+                    except Exception:
+                        pass
+                    part += 1
+                    stem, ext = os.path.splitext(base_path)
+                    new_path = f"{stem}_part{part}{ext}"
+                    wf = wave.open(new_path, "wb")
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(SAMPLE_RATE)
+                    part_frames = 0
+                    self.path = new_path
+                    self.log.info(f"WAV limit approaching; rolled over to {new_path}")
         except Exception as e:      # noqa: BLE001
             self.error = str(e)
             self.log.error(f"Recording error: {e}")
@@ -755,7 +777,8 @@ class NetServer:
                         chunk = conn.recv(4096)
                     except socket.timeout:
                         idle += 0.5
-                        if idle > 5.0:
+                        if idle >= 2.0:
+                            rx.log.warn(f"TCP client {addr[0]} timed out after {idle:.1f}s of silence")
                             break
                         continue
                     if not chunk:
@@ -971,11 +994,18 @@ class Receiver:
         self.config.save_soon()
 
     def set_port(self, port):
-        port = int(port)
-        self.config.data["network"]["port"] = port
-        self.config.save_soon()
-        self.net.start(port)
-        self.log.info(f"Port changed to {port}")
+        try:
+            port = int(port)
+            if not (1 <= port <= 65535):
+                raise ValueError(f"Port {port} out of range (1-65535)")
+            self.config.data["network"]["port"] = port
+            self.config.save_soon()
+            self.net.start(port)
+            self.log.info(f"Port changed to {port}")
+            return True
+        except (OSError, OverflowError, ValueError) as e:
+            self.log.error(f"Failed to set port to {port}: {e}")
+            return False
 
     # -- controls --------------------------------------------------------------------
     @property
@@ -1073,18 +1103,29 @@ class Receiver:
         now = time.monotonic()
         st = self.stats
         ip = addr[0]
-        self.client_sample_rate = sample_rate
         gap = now - st.last_packet
         alive = st.last_packet > 0 and gap < self.stream_timeout
+
+        # Lock to first phone check (lock_client)
         if self.client_ip and ip != self.client_ip and alive and self.config.data["network"]["lock_client"]:
             st.ignored += 1
             if st.ignored == 1 or st.ignored % 500 == 0:
                 self.log.warn(f"Ignoring audio from {ip}: already receiving from {self.client_ip}")
             return
 
-        # Multi-client session tracking
+        self.client_sample_rate = sample_rate
+
+        # Multi-client session tracking with session cap (max 8)
         session = self.client_streams.get(addr)
         if session is None:
+            if len(self.client_streams) >= 8:
+                # Evict oldest idle session
+                oldest_addr = min(self.client_streams.keys(), key=lambda a: self.client_streams[a].last_seen)
+                if (now - self.client_streams[oldest_addr].last_seen) > 1.0:
+                    del self.client_streams[oldest_addr]
+                else:
+                    st.ignored += 1
+                    return
             a = self.config.data["audio"]
             jb = JitterBuffer(a["jitter_ms"], a["adaptive_jitter"])
             session = ClientSession(addr, transport, sample_rate, jb)
@@ -1097,7 +1138,8 @@ class Receiver:
 
         session.jb.push(seq, pcm)
 
-        if ip != self.client_ip or not alive:
+        # Primary client assignment (only reset session when primary client is idle/timed-out or initial)
+        if not alive or not self.client_ip:
             first = st.last_packet == 0 or ip != self.client_ip
             self.client_ip, self.client_addr, self.transport = ip, addr, transport
             ignored = st.ignored
@@ -1107,7 +1149,7 @@ class Receiver:
             self.jb.reset()
             self._reset_dsp = True
             self.log.info(f"{'Phone connected' if first else 'Stream resumed'}: {ip} via {transport} ({sample_rate // 1000}kHz)")
-        else:
+        elif ip == self.client_ip:
             self.client_addr, self.transport = addr, transport
 
         st.packets += 1
@@ -1138,7 +1180,10 @@ class Receiver:
                 d = (now - st.last_arrival) * 1000.0 - len(pcm) * 500.0 / SAMPLE_RATE
                 st.jitter_ms += (abs(d) - st.jitter_ms) / 16.0
         st.last_arrival = now
-        self.jb.push(seq, pcm)
+
+        # Single-client mode directly feeds self.jb; multi-client mode feeds per-session jb
+        if len(self.client_streams) <= 1:
+            self.jb.push(seq, pcm)
 
     # -- engine thread ---------------------------------------------------------------
     def _engine_loop(self):
@@ -1232,6 +1277,11 @@ class Receiver:
         pcm, kind = self.jb.pop()
         tone = self._tone_block(FRAME)
 
+        if self._reset_dsp:
+            self._reset_dsp = False
+            self.processor.reset()
+            self._after_gap = True
+
         if multi_blocks:
             # Multi-device active mixing
             if self.config.data["network"].get("mix_mode", "sum") == "duck":
@@ -1239,7 +1289,8 @@ class Receiver:
                 max_idx = int(np.argmax(powers))
                 summed = np.zeros(FRAME, dtype=np.float32)
                 for idx, b in enumerate(multi_blocks):
-                    weight = 1.0 if idx == max_idx or powers[max_idx] < 1e-4 else 0.35
+                    # -12 dB ducking (0.25x power)
+                    weight = 1.0 if idx == max_idx or powers[max_idx] < 1e-4 else 0.25
                     summed += b * weight
                 x = np.tanh(summed * 1.1)
             else:
@@ -1259,10 +1310,6 @@ class Receiver:
                 return False
             self._emit(tone, tone, tone)
             return True
-        elif self._reset_dsp:
-            self._reset_dsp = False
-            self.processor.reset()
-            self._after_gap = True
 
         if not multi_blocks:
             if pcm is not None:

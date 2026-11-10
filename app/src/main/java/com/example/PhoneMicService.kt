@@ -92,7 +92,7 @@ class PhoneMicService : Service() {
         }
 
         const val MIC_STANDARD = "MIC"
-        const val MIC_CALL = "MIC"
+        const val MIC_CALL = "VOICE_COMMUNICATION"
         const val MIC_UNPROCESSED = "UNPROCESSED"
         const val MIC_RAW = "VOICE_RECOGNITION"
         const val MIC_CAMCORDER = "CAMCORDER"
@@ -359,7 +359,8 @@ class PhoneMicService : Service() {
             }
             MIC_RAW -> MediaRecorder.AudioSource.VOICE_RECOGNITION
             MIC_CAMCORDER -> MediaRecorder.AudioSource.CAMCORDER
-            MIC_STANDARD, MIC_CALL -> MediaRecorder.AudioSource.MIC
+            MIC_CALL -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            MIC_STANDARD -> MediaRecorder.AudioSource.MIC
             else -> MediaRecorder.AudioSource.MIC
         }
     }
@@ -479,6 +480,13 @@ class PhoneMicService : Service() {
             recorder = null
             failStart("Could not initialize microphone on this device")
             return
+        }
+
+        // Align currentQuality to the actual rate that successfully opened
+        currentQuality = when (actualSampleRate) {
+            16000 -> AudioQuality.LOW_BANDWIDTH_16K
+            24000 -> AudioQuality.BALANCED_24K
+            else -> AudioQuality.STUDIO_48K
         }
 
         running = true
@@ -660,15 +668,20 @@ class PhoneMicService : Service() {
                 val cmdBuf = ByteArray(4)
                 while (running && !stopRequested && !socket.isClosed && myGeneration == generation) {
                     try {
-                        val readBytes = input.read(cmdBuf)
-                        if (readBytes == 4) {
+                        var totalRead = 0
+                        while (totalRead < 4) {
+                            val count = input.read(cmdBuf, totalRead, 4 - totalRead)
+                            if (count < 0) break
+                            totalRead += count
+                        }
+                        if (totalRead == 4) {
                             val cmdStr = String(cmdBuf, Charsets.US_ASCII)
                             if (cmdStr == CMD_PAUSE) {
                                 mainHandler.post { pauseStreaming() }
                             } else if (cmdStr == CMD_RESUME) {
                                 mainHandler.post { resumeStreaming() }
                             }
-                        } else if (readBytes < 0) {
+                        } else {
                             break
                         }
                     } catch (_: SocketException) {
@@ -711,12 +724,17 @@ class PhoneMicService : Service() {
                 val currentRec = recorder ?: break
                 val read: Int
                 if (needsResampling44k) {
-                    val read44k = currentRec.read(raw44k, 0, raw44k.size)
-                    if (read44k > 0) {
+                    var total44k = 0
+                    while (total44k < raw44k.size && running && !stopRequested) {
+                        val count = currentRec.read(raw44k, total44k, raw44k.size - total44k)
+                        if (count <= 0) break
+                        total44k += count
+                    }
+                    if (total44k == raw44k.size) {
                         resample441To480(raw44k, data)
                         read = PACKET_SIZE
                     } else {
-                        read = read44k
+                        read = total44k
                     }
                 } else {
                     read = currentRec.read(data, 0, data.size)
@@ -733,14 +751,20 @@ class PhoneMicService : Service() {
                             try {
                                 recorder?.stop()
                                 recorder?.release()
-                                recorder = AudioRecord(
+                                val recBufSize = currentQuality.packetSize * 4
+                                val newRec = AudioRecord(
                                     MediaRecorder.AudioSource.MIC,
                                     actualSampleRate,
                                     AudioFormat.CHANNEL_IN_MONO,
                                     AudioFormat.ENCODING_PCM_16BIT,
-                                    PACKET_SIZE * 4
+                                    recBufSize
                                 )
-                                recorder?.startRecording()
+                                if (newRec.state == AudioRecord.STATE_INITIALIZED) {
+                                    recorder = newRec
+                                    newRec.startRecording()
+                                } else {
+                                    newRec.release()
+                                }
                             } catch (_: Exception) {}
                         }
                     } else {
@@ -817,6 +841,10 @@ class PhoneMicService : Service() {
                 while (running && !stopRequested && !socket.isClosed && myGeneration == generation) {
                     try {
                         socket.receive(cmdPacket)
+                        // B6: Security - only accept remote control commands from the connected receiver IP
+                        if (cmdPacket.address != address) {
+                            continue
+                        }
                         if (cmdPacket.length >= 4) {
                             val cmdStr = String(cmdBuf, 0, 4, Charsets.US_ASCII)
                             if (cmdStr == CMD_PAUSE) {
@@ -874,12 +902,17 @@ class PhoneMicService : Service() {
                 val currentRec = recorder ?: break
                 val read: Int
                 if (needsResampling44k) {
-                    val read44k = currentRec.read(raw44k, 0, raw44k.size)
-                    if (read44k > 0) {
+                    var total44k = 0
+                    while (total44k < raw44k.size && running && !stopRequested) {
+                        val count = currentRec.read(raw44k, total44k, raw44k.size - total44k)
+                        if (count <= 0) break
+                        total44k += count
+                    }
+                    if (total44k == raw44k.size) {
                         resample441To480(raw44k, audio)
                         read = PACKET_SIZE
                     } else {
-                        read = read44k
+                        read = total44k
                     }
                 } else {
                     read = currentRec.read(audio, 0, audio.size)
@@ -904,14 +937,20 @@ class PhoneMicService : Service() {
                         try {
                             recorder?.stop()
                             recorder?.release()
-                            recorder = AudioRecord(
+                            val recBufSize = currentQuality.packetSize * 4
+                            val newRec = AudioRecord(
                                 MediaRecorder.AudioSource.MIC,
                                 actualSampleRate,
                                 AudioFormat.CHANNEL_IN_MONO,
                                 AudioFormat.ENCODING_PCM_16BIT,
-                                PACKET_SIZE * 4
+                                recBufSize
                             )
-                            recorder?.startRecording()
+                            if (newRec.state == AudioRecord.STATE_INITIALIZED) {
+                                recorder = newRec
+                                newRec.startRecording()
+                            } else {
+                                newRec.release()
+                            }
                         } catch (_: Exception) {}
                     }
                 } else {
@@ -1035,12 +1074,16 @@ class PhoneMicService : Service() {
 
     private fun releaseLocks() {
         try {
-            wakeLock?.release()
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
         } catch (_: Exception) {}
         wakeLock = null
 
         try {
-            wifiLock?.release()
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+            }
         } catch (_: Exception) {}
         wifiLock = null
     }

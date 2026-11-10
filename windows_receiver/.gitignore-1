@@ -1,8 +1,0 @@
-__pycache__/
-*.pyc
-build/
-dist/
-phonemic_config.json
-phonemic_config.json.*
-phonemic_crash.log
-*.wav

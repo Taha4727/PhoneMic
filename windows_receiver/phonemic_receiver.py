@@ -65,7 +65,16 @@ def parse_args(argv):
     p.add_argument("--check", action="store_true", help="check dependencies, audio devices, port and firewall")
     p.add_argument("--list-devices", action="store_true", help="list audio output devices and exit")
     p.add_argument("--selftest", action="store_true", help="check tray, shortcuts, firewall and other Windows features, then exit")
-    p.add_argument("--port", type=int, help="listen on this port (saved to settings)")
+    def valid_port(val):
+        try:
+            p = int(val)
+            if 1 <= p <= 65535:
+                return p
+        except Exception:
+            pass
+        raise argparse.ArgumentTypeError(f"Invalid port: '{val}'. Must be between 1 and 65535.")
+
+    p.add_argument("--port", type=valid_port, help="listen on this port (1-65535, saved to settings)")
     p.add_argument("--minimized", action="store_true", help="start minimized")
     p.add_argument("--reset-config", action="store_true", help="reset settings to defaults (keeps your presets)")
     p.add_argument("--version", action="store_true", help="print version and exit")

@@ -429,7 +429,19 @@ class CliReceiver:
 
             # Auto-discovery probe
             if buf[:4] == b"PMD0" or DISCOVERY_PROBE in buf[:min(n, 32)]:
-                sock.sendto(DISCOVERY_REPLY + f" {VERSION} 127.0.0.1".encode("ascii"), addr)
+                # Resolve real local interface IP for sender's subnet
+                local_ip = "127.0.0.1"
+                try:
+                    s_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s_probe.connect((addr[0], addr[1] if addr[1] > 0 else 5001))
+                    local_ip = s_probe.getsockname()[0]
+                    s_probe.close()
+                except Exception:
+                    try:
+                        local_ip = socket.gethostbyname(socket.gethostname())
+                    except Exception:
+                        pass
+                sock.sendto(DISCOVERY_REPLY + f" {VERSION} {local_ip}".encode("ascii"), addr)
                 continue
 
             # Packet headers:
@@ -451,25 +463,37 @@ class CliReceiver:
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             server.bind(("0.0.0.0", self.port))
-            server.listen(8)
+            server.listen(4)
         except Exception as e:
             print(f"\n[Error] Cannot bind TCP port {self.port}: {e}", file=sys.stderr)
             self.running = False
             return
 
+        active_tcp_clients = []
         while self.running:
             try:
                 conn, addr = server.accept()
-                threading.Thread(target=self._handle_tcp_client, args=(conn, addr), daemon=True).start()
+                # Cap concurrent TCP connections to 8
+                active_tcp_clients = [t for t in active_tcp_clients if t.is_alive()]
+                if len(active_tcp_clients) >= 8:
+                    conn.close()
+                    continue
+                t = threading.Thread(target=self._handle_tcp_client, args=(conn, addr), daemon=True)
+                active_tcp_clients.append(t)
+                t.start()
             except Exception:
                 break
 
     def _handle_tcp_client(self, conn, addr):
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        conn.settimeout(2.0)
         acc = bytearray()
         try:
             while self.running:
-                chunk = conn.recv(4096)
+                try:
+                    chunk = conn.recv(4096)
+                except socket.timeout:
+                    continue
                 if not chunk:
                     break
                 acc.extend(chunk)
@@ -486,9 +510,17 @@ class CliReceiver:
                 pass
 
     def _on_client_packet(self, addr, pcm, sample_rate, seq):
+        now = time.monotonic()
         with self.lock:
             client = self.clients.get(addr)
             if client is None:
+                # Cap clients collection at 8 to prevent memory exhaustion
+                if len(self.clients) >= 8:
+                    oldest_addr = min(self.clients.keys(), key=lambda a: self.clients[a].last_seen)
+                    if (now - self.clients[oldest_addr].last_seen) > 1.0:
+                        del self.clients[oldest_addr]
+                    else:
+                        return
                 client = ClientStream(addr, sample_rate)
                 self.clients[addr] = client
             client.push(pcm, sample_rate, seq)
@@ -518,12 +550,12 @@ class CliReceiver:
                 # Multiple devices connected!
                 blocks = [c.pop_48k() for c in active]
                 if self.mix_mode == "duck":
-                    # Auto-ducking: find loudest speaker, duck others by -10 dB (~0.32x)
+                    # Auto-ducking: find loudest speaker, duck others by -12 dB / 75% (0.25x weight)
                     powers = [float(np.mean(b ** 2)) for b in blocks]
                     max_idx = int(np.argmax(powers))
                     summed = np.zeros(FRAME_48K, dtype=np.float32)
                     for idx, b in enumerate(blocks):
-                        weight = 1.0 if idx == max_idx or powers[max_idx] < 1e-4 else 0.32
+                        weight = 1.0 if idx == max_idx or powers[max_idx] < 1e-4 else 0.25
                         summed += b * weight
                     mixed = np.tanh(summed * 1.1)  # Soft limiter
                 else:

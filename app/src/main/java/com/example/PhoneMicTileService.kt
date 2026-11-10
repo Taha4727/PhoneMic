@@ -22,7 +22,9 @@ class PhoneMicTileService : TileService() {
             val intent = Intent(this, PhoneMicService::class.java).apply {
                 action = PhoneMicService.ACTION_TOGGLE_PAUSE
             }
-            startService(intent)
+            try {
+                androidx.core.content.ContextCompat.startForegroundService(this, intent)
+            } catch (_: Exception) {}
         } else {
             val appIntent = Intent(this, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
