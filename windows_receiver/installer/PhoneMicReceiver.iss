@@ -2,7 +2,7 @@
 ; Easiest: run installer\build_installer.bat, which builds the program folder first and then calls the compiler.
 
 #define AppName "PhoneMic Receiver"
-#define AppVersion "0.11.0"
+#define AppVersion "1.2.0"
 #define AppExe "PhoneMicReceiver.exe"
 #define AppPort "5001"
 

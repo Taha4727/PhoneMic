@@ -2,10 +2,27 @@
 > **🤖 100% Made With AI**  
 > This entire receiver engine, GUI, DSP chain, and CLI tool were authored using Artificial Intelligence.
 
-# PhoneMic Windows Receiver v0.11.0
+# PhoneMic Windows Receiver v1.2.0
 
 Turn your Android phone into a low-latency PC microphone over **Wi-Fi** or **USB tethering**.
 The wire protocol is unchanged, so the Android app needs no update, and settings from earlier versions are carried over.
+
+---
+
+## What's new in 1.2.0
+
+### Compact Minimal GUI
+* **Streamlined Widget View**: Toggle anytime between Full Studio and a compact desktop Minimal GUI via the `⤢ Compact` / `⛶ Full UI` button or shortcut **F10** / **Ctrl+Shift+M**.
+* **Essential Controls Kept Handy**: Live animated VU meter with numeric dB readout, Quick Mute, Monitor, Record, Effects Bypass, and Master Gain step buttons (`-`, `+`, `0 dB`).
+* **Connection Status**: Real-time readouts of client IP, sample rate profile, jitter/buffer depth, and active multi-phone count.
+* **Independent Window Geometry**: Remembers your preferred desktop placement and dimensions for both Full Studio and Minimal modes independently.
+
+### Protocol, Networking & Audio Fixes
+* **Wi-Fi Discovery Routing**: CLI receiver now queries routing sockets to reply with the accurate local host interface IP rather than 127.0.0.1.
+* **Audio Format & Sample Rate Consistency**: Android client and receiver strictly sync actual hardware capture sample rates with packet magics and packet sizes.
+* **Multi-Phone Jitter Stability**: Per-client session isolation prevents alternating packets from resetting audio buffers or swapping sample rates.
+* **WAV Recording 2 GB Rollover**: Engine automatically segments prolonged recordings to adhere to WAV 32-bit limits cleanly without corruption.
+* **Strict Port Validation**: Bounds check `1`–`65535` across all command line flags, GUI inputs, and config files with graceful error recovery.
 
 ---
 

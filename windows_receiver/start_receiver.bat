@@ -1,5 +1,5 @@
 @echo off
-title PhoneMic Windows Receiver v0.11.0
+title PhoneMic Windows Receiver v1.2.0
 color 0b
 
 :: 1. A compiled .exe next to this script wins

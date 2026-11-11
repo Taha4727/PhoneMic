@@ -67,6 +67,8 @@ DEFAULTS = {
         "accent": "teal",            # applied at start-up
         "first_run_done": False,
         "window_geometry": "",
+        "ui_mode": "default",        # default (full studio) | minimal (compact mini widget)
+        "minimal_geometry": "",
     },
     "user_fx_presets": {},
     "user_voice_presets": {},

@@ -55,7 +55,7 @@ data class PhoneMicUiState(
     val packetsSent: Long = 0L,
     val bytesSent: Long = 0L,
     val packetRate: Float = 0f,
-    val receiverVersion: String = "Windows Receiver v0.11.0",
+    val receiverVersion: String = "Windows Receiver v1.2.0",
     val targetAudioDevice: String = "CABLE Input (VB-Audio Virtual Cable)"
 )
 

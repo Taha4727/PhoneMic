@@ -15,7 +15,9 @@ from .dsp import FX_BUILTIN_PRESETS, VoiceChanger, fx_preset, lin_to_db
 from .widgets import (T, dp, font, set_scale, apply_styles, apply_accent, init_fonts, autowrap, FlatButton, Segmented, Combo,
                       Card, ScrollFrame, NavButton, LevelMeter, SpectrumView, Tooltip)
 from .ui_kit import SettingRow, GaugeRow, SearchBox
+from .minimal_gui import MinimalView
 from . import icon
+
 
 NAV = [("dashboard", "Dashboard", "dashboard"), ("sound", "Sound", "sound"), ("voice", "Voice Changer", "voice"),
        ("devices", "Audio Devices", "devices"), ("network", "Network", "network"),
@@ -129,7 +131,7 @@ class App:
         apply_accent(self.cfg.data["app"]["accent"])           # before any widget exists: colours are read at creation
         root.title(f"{APP_NAME} {VERSION}")
         root.configure(bg=T.BG)
-        root.minsize(dp(920), dp(640))
+        root.minsize(dp(820), dp(560))
         self._restore_geometry()
         apply_styles(root)
         icon.apply(root)
@@ -137,6 +139,8 @@ class App:
             root.attributes("-topmost", True)
 
         self.advanced = bool(self.cfg.data["app"]["advanced_mode"])
+        self.ui_mode = self.cfg.data["app"].get("ui_mode", "default")
+        self.minimal_view = None
         self.binder = SettingsBinder(receiver, hooks=self)
         self.binder.listen_any(self._setting_changed)
         self.pages, self.page_classes, self.nav = {}, {}, {}
@@ -164,6 +168,9 @@ class App:
         self.apply_hotkeys()
         self.apply_tray()
 
+        if self.ui_mode == "minimal":
+            self.switch_ui_mode("minimal", save_previous_geo=False)
+
         root.bind_all("<MouseWheel>", self._on_wheel)
         root.bind_all("<Button-4>", lambda e: self._on_wheel(e, 1))
         root.bind_all("<Button-5>", lambda e: self._on_wheel(e, -1))
@@ -172,6 +179,9 @@ class App:
         root.bind("<Control-r>", lambda e: self.toggle_record())
         root.bind("<Control-b>", lambda e: self.toggle_bypass())
         root.bind("<Control-f>", lambda e: self.search.entry.focus_set())
+        root.bind("<F10>", lambda e: self.toggle_ui_mode())
+        root.bind("<Control-Shift-M>", lambda e: self.toggle_ui_mode())
+        root.bind("<Control-Shift-m>", lambda e: self.toggle_ui_mode())
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         if start_minimized:
             root.withdraw() if self.tray.running else root.iconify()
@@ -284,13 +294,13 @@ class App:
         if m:
             w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
             sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-            ok = w >= dp(760) and h >= dp(520) and -50 <= x < sw - 150 and -10 <= y < sh - 100
-        self.root.geometry(geo if ok else f"{dp(1100)}x{dp(780)}")
+            ok = w >= dp(720) and h >= dp(480) and -50 <= x < sw - 150 and -10 <= y < sh - 100
+        self.root.geometry(geo if ok else f"{dp(960)}x{dp(660)}")
 
     # ---- layout ---------------------------------------------------------------------------------------------------------------
     def _build_shell(self):
         root = self.root
-        side = tk.Frame(root, bg=T.SIDEBAR, width=dp(218))
+        self.side_frame = side = tk.Frame(root, bg=T.SIDEBAR, width=dp(218))
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
         logo = tk.Frame(side, bg=T.SIDEBAR)
@@ -314,12 +324,18 @@ class App:
         self.side_state = tk.Label(foot, text="", bg=T.SIDEBAR, fg=T.DIM, font=font(9), anchor="w", justify="left")
         self.side_state.pack(fill="x", pady=(dp(14), 0))
 
-        main = tk.Frame(root, bg=T.BG)
+        self.main_frame = main = tk.Frame(root, bg=T.BG)
         main.pack(side="right", fill="both", expand=True)
         head = tk.Frame(main, bg=T.BG)
         head.pack(fill="x", padx=dp(24), pady=(dp(18), dp(8)))
         self.title_label = tk.Label(head, text="", bg=T.BG, fg=T.TEXT, font=font(22, "bold", True))
         self.title_label.pack(side="left")
+
+        # Top-right header buttons: Mode toggle (Compact) and Connection Status Chip
+        self.btn_compact = FlatButton(head, "⤢ Compact", lambda: self.switch_ui_mode("minimal"), size=9)
+        self.btn_compact.pack(side="right", padx=(dp(10), 0))
+        Tooltip(self.btn_compact, "Switch to compact Minimal GUI widget (F10)")
+
         chip = tk.Frame(head, bg=T.SURFACE, highlightthickness=1, highlightbackground=T.BORDER)
         chip.pack(side="right")
         self.chip_dot = tk.Label(chip, text="\u25cf", bg=T.SURFACE, fg=T.ACCENT, font=font(11))
@@ -357,6 +373,68 @@ class App:
     def _view_listener(self, value):
         if self.view_toggle.get() != bool(value):
             self.view_toggle.set(bool(value))
+
+    # ---- ui mode switching (Default Studio vs Minimal Compact) -----------------------------------------------------------------
+    def toggle_ui_mode(self):
+        new_mode = "default" if self.ui_mode == "minimal" else "minimal"
+        self.switch_ui_mode(new_mode)
+
+    def switch_ui_mode(self, mode, save_previous_geo=True):
+        if mode == self.ui_mode and self.minimal_view is not None:
+            return
+        root = self.root
+
+        if mode == "minimal":
+            # Switching from Default to Minimal
+            if save_previous_geo and self.ui_mode == "default" and root.state() == "normal":
+                self.cfg.data["app"]["window_geometry"] = root.winfo_geometry()
+
+            # Hide default shell
+            self.side_frame.pack_forget()
+            self.main_frame.pack_forget()
+
+            # Ensure minimal view instance exists
+            if self.minimal_view is None:
+                self.minimal_view = MinimalView(root, self)
+            self.minimal_view.pack(fill="both", expand=True)
+            self.minimal_view.refresh_controls()
+
+            # Set compact window boundaries
+            root.minsize(dp(320), dp(175))
+            mg = self.cfg.data["app"].get("minimal_geometry")
+            ok = False
+            m = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", mg or "")
+            if m:
+                w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+                sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+                ok = w >= dp(280) and h >= dp(150) and -50 <= x < sw - 100 and -10 <= y < sh - 80
+            root.geometry(mg if ok else f"{dp(330)}x{dp(185)}")
+
+            self.ui_mode = "minimal"
+            self.cfg.data["app"]["ui_mode"] = "minimal"
+            self.cfg.save_soon()
+
+        else:
+            # Switching from Minimal to Default
+            if save_previous_geo and self.ui_mode == "minimal" and root.state() == "normal":
+                self.cfg.data["app"]["minimal_geometry"] = root.winfo_geometry()
+
+            if self.minimal_view is not None:
+                self.minimal_view.pack_forget()
+
+            # Restore default shell
+            self.side_frame.pack(side="left", fill="y")
+            self.main_frame.pack(side="right", fill="both", expand=True)
+
+            # Set studio window boundaries
+            root.minsize(dp(820), dp(560))
+            self._restore_geometry()
+            self.refresh_header()
+            self.refresh_statusbar()
+
+            self.ui_mode = "default"
+            self.cfg.data["app"]["ui_mode"] = "default"
+            self.cfg.save_soon()
 
     # ---- navigation ------------------------------------------------------------------------------------------------------------
     def show_page(self, key):
@@ -669,17 +747,26 @@ class App:
                 self.proc.viz_active = False
                 self.root.after(500, self.tick)
                 return
-            page = self.pages.get(self.current)
-            self.proc.viz_active = self.current == "dashboard"
-            now = time.monotonic()
-            if page is not None:
-                page.refresh_fast()
-            if now - self._slow_t > 0.25:
-                self._slow_t = now
-                self.refresh_header()
-                self.refresh_statusbar()
+
+            if self.ui_mode == "minimal" and self.minimal_view is not None:
+                self.proc.viz_active = True
+                self.minimal_view.refresh_fast()
+                now = time.monotonic()
+                if now - self._slow_t > 0.25:
+                    self._slow_t = now
+                    self.minimal_view.refresh_controls()
+            else:
+                page = self.pages.get(self.current)
+                self.proc.viz_active = self.current == "dashboard"
+                now = time.monotonic()
                 if page is not None:
-                    page.refresh_slow()
+                    page.refresh_fast()
+                if now - self._slow_t > 0.25:
+                    self._slow_t = now
+                    self.refresh_header()
+                    self.refresh_statusbar()
+                    if page is not None:
+                        page.refresh_slow()
         except Exception as e:      # noqa: BLE001 - the UI loop must never die
             key = repr(e)
             if key not in self._err_seen:
@@ -704,7 +791,8 @@ class App:
         self._quitting = True
         try:
             if self.root.state() == "normal":
-                self.cfg.data["app"]["window_geometry"] = self.root.winfo_geometry()
+                geo_key = "minimal_geometry" if self.ui_mode == "minimal" else "window_geometry"
+                self.cfg.data["app"][geo_key] = self.root.winfo_geometry()
         except Exception:
             pass
         self.hotkeys.shutdown()

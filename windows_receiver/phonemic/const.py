@@ -1,6 +1,6 @@
 """Protocol, audio and application constants (wire protocol is unchanged from v0.8)."""
 
-VERSION = "0.11.0"
+VERSION = "1.2.0"
 APP_NAME = "PhoneMic Receiver"
 
 # --- Network / wire protocol (must match PhoneMicService.kt) -----------------

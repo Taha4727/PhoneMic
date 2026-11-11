@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for PhoneMic Windows Receiver v0.11.0
+PyInstaller spec for PhoneMic Windows Receiver v1.2.0
 
     pyinstaller --clean PhoneMicReceiver.spec                 -> dist\PhoneMicReceiver.exe        (single file, portable)
     set PM_ONEDIR=1 && pyinstaller --clean PhoneMicReceiver.spec
@@ -19,7 +19,7 @@ hiddenimports = [
     "winreg", "wave", "webbrowser",
     # the application package (listed explicitly so the lazy imports in gui/launcher are always bundled)
     "phonemic", "phonemic.const", "phonemic.config", "phonemic.system", "phonemic.dsp", "phonemic.engine",
-    "phonemic.widgets", "phonemic.ui_kit", "phonemic.gui", "phonemic.pages", "phonemic.wizard", "phonemic.cli", "phonemic.icon",
+    "phonemic.widgets", "phonemic.ui_kit", "phonemic.gui", "phonemic.minimal_gui", "phonemic.pages", "phonemic.wizard", "phonemic.cli", "phonemic.icon",
     "phonemic.bindings", "phonemic.settings_meta", "phonemic.presets_io", "phonemic.hotkeys", "phonemic.tray", "phonemic.cues",
     "phonemic.selftest", "phonemic.qr", "phonemic.qrcodegen",
 ]
