@@ -1,5 +1,5 @@
 @echo off
-title PhoneMic Windows Receiver v1.2.0
+title PhoneMic Windows Receiver v1.3.0
 color 0b
 
 :: 1. A compiled .exe next to this script wins
@@ -11,9 +11,9 @@ if exist "%~dp0dist\PhoneMicReceiver\PhoneMicReceiver.exe" start "" "%~dp0dist\P
 python --version >nul 2>&1
 if errorlevel 1 goto :no_python
 
-python -c "import numpy, sounddevice, pystray, PIL" >nul 2>&1
+python -c "import numpy, sounddevice, customtkinter, pystray, PIL" >nul 2>&1
 if not errorlevel 1 goto :run
-echo [*] Installing packages (numpy, sounddevice, and pystray and pillow for the tray icon)...
+echo [*] Installing packages (numpy, sounddevice, customtkinter, pystray, and pillow)...
 python -m pip install -r "%~dp0requirements.txt"
 
 :run

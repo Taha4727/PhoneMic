@@ -5,7 +5,7 @@ import time
 import socket
 import subprocess
 
-from . import system
+from . import system, virtual_mic
 from .const import VERSION, DEFAULT_PORT, VB_CABLE_URL
 
 
@@ -97,7 +97,13 @@ def run_interactive_dependency_fixer(interactive=True):
             missing.append(pkg)
         elif not good:
             ok_all = False
-    line(_module_ok("tkinter"), "tkinter (GUI)", "" if _module_ok("tkinter") else "- console mode still works (--cli)")
+    line(_module_ok("tkinter"), "tkinter (GUI)",
+         "" if _module_ok("tkinter") else ("- Arch Linux: sudo pacman -S tk  (console mode still works with --cli)"
+                                           if system.IS_LINUX else "- console mode still works (--cli)"))
+    ctk_ok, ctk_detail = _module_status("customtkinter")
+    line(ctk_ok, "customtkinter (modern dark UI)", ctk_detail if not ctk_ok else "")
+    if not ctk_ok and ctk_detail.startswith("not installed"):
+        missing.append("customtkinter")
     tray_ok = _module_ok("pystray") and _module_ok("PIL")
     line(tray_ok, "pystray and Pillow (tray icon, optional)", "" if tray_ok else "- install with: pip install pystray pillow")
 
@@ -105,6 +111,8 @@ def run_interactive_dependency_fixer(interactive=True):
         ok_all = False
         print()
         print(f"Missing: {', '.join(missing)}")
+        if system.IS_LINUX:
+            print("Arch Linux hint: use setup_linux.sh / .venv or install python-numpy, python-sounddevice, python-pillow, tk, pipewire-pulse")
         if interactive:
             try:
                 ans = input("Install them now with pip? (Y/N): ").strip().lower()
@@ -115,7 +123,7 @@ def run_interactive_dependency_fixer(interactive=True):
                 if rc == 0:
                     print(_c("green", "Installed. Re-run the check to confirm."))
                 else:
-                    print(_c("red", "pip failed - check your internet connection."))
+                    print(_c("red", "pip failed - use a virtualenv or setup_linux.sh on externally-managed Python (PEP 668)."))
     elif missing:
         ok_all = False
 
@@ -124,11 +132,16 @@ def run_interactive_dependency_fixer(interactive=True):
         devs = system.list_output_devices(engine._sd)
         api = system.resolve_api(devs, "auto")
         line(bool(devs), f"Audio output devices: {len(devs)}", f"(preferred backend: {api or 'none'})")
-        cable = any(d.is_cable for d in devs)
-        line(cable, "VB-CABLE virtual microphone", "" if cable else f"- optional, needed for Discord/OBS/Zoom: {VB_CABLE_URL}")
+        if system.IS_LINUX:
+            vm = virtual_mic.status(devs)
+            line(vm.supported, f"Linux virtual mic ({vm.backend})", vm.detail)
+        else:
+            cable = any(d.is_cable for d in devs)
+            line(cable, "VB-CABLE virtual microphone", "" if cable else f"- optional, needed for Discord/OBS/Zoom: {VB_CABLE_URL}")
         ok_all &= bool(devs)
     else:
-        line(False, "PortAudio / sounddevice", engine.SD_ERROR)
+        hint = " (Arch Linux: sudo pacman -S portaudio)" if system.IS_LINUX else ""
+        line(False, "PortAudio / sounddevice", f"{engine.SD_ERROR}{hint}")
         ok_all = False
 
     # can we bind the port?
@@ -147,6 +160,9 @@ def run_interactive_dependency_fixer(interactive=True):
     if system.IS_WIN:
         fw = system.firewall_rules_ok(DEFAULT_PORT)
         line(fw, "Windows Firewall rules", "" if fw else "- run fix_firewall.bat as Administrator")
+    elif system.IS_LINUX:
+        fw_ok, fw_label, fw_detail = system.firewall_summary(DEFAULT_PORT)
+        line(fw_ok is not False, f"Firewall ({fw_label})", fw_detail)
     ip = system.NetworkInfo()
     ip.refresh()
     for i in ip.get():

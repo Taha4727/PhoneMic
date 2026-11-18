@@ -102,7 +102,7 @@ STAGES = (
     Stage("noise", "Noise suppression", "Learns steady background noise such as fans and hiss, and removes it.", "smart_noise_cancel"),
     Stage("gate", "Noise gate", "Silences the microphone between words so leftover noise is not heard.", "gate_enabled"),
     Stage("agc", "Auto gain", "Keeps your voice at a steady loudness as you move around.", "agc_enabled"),
-    Stage("voice", "Voice changer", "Pitch and character effects. Open the Voice Changer page to set it up.", link="voice"),
+    Stage("voice", "Voice changer", "Pitch, formant and character effects.", enable="vc.enabled"),
     Stage("eq", "Equalizer", "Shapes the tone with up to five adjustable bands.", "eq_enabled"),
     Stage("deess", "De-esser", "Softens harsh \"s\" and \"sh\" sounds.", "deess_enabled"),
     Stage("comp", "Compressor", "Evens out loud and quiet speech for a fuller, more even sound.", "comp_enabled"),
@@ -361,14 +361,21 @@ add(key="vc.mix", target="vc", page="voice", group="voice", label="Effect amount
 
 # ---- devices ---------------------------------------------------------------------------------------------------------
 add(key="audio.api", target="cfg", page="devices", group="output", label="Audio backend",
-    summary="The Windows audio system used for output.",
-    details="Auto picks the best one available, usually WASAPI, which has the lowest delay. Use DirectSound or MME only if a "
-            "device you need does not appear under WASAPI.", kind="custom", short="Backend", keywords="wasapi mme directsound driver")
+    summary="The OS audio system used for output.",
+    details="Auto picks the lowest-latency backend available (WASAPI on Windows, PipeWire or PulseAudio on Linux). Switch only if a device you need is missing under the default backend.",
+    kind="custom", short="Backend", keywords="wasapi mme directsound pipewire pulseaudio alsa driver")
 add(key="audio.output_device", target="sys", page="devices", group="output", label="Output device",
-    summary="Where the voice is sent. Pick VB-CABLE to use it as a microphone in other apps.",
-    details="Choose \"CABLE Input\" to make your phone appear as a microphone in Discord, OBS, Zoom and similar apps, where you "
-            "then pick \"CABLE Output\" as the microphone. Choose your speakers or headphones to simply hear it yourself.",
-    kind="custom", short="Device", keywords="vb-cable virtual cable speakers headphones microphone")
+    summary="Where the voice is sent. Pick a virtual cable to use it as a mic.",
+    details="Choose VB-CABLE CABLE Input on Windows or PhoneMic Virtual Mic on Linux to feed Discord, OBS, or browsers. Pick speakers or headphones to play audio directly.",
+    kind="custom", short="Device", keywords="vb-cable virtual cable mic pipewire pulseaudio speakers headphones microphone discord")
+cfg("audio.linux_auto_virtual_mic", "devices", "output", "Auto-create Linux virtual mic",
+    "Creates a PipeWire or PulseAudio virtual mic when the receiver starts.",
+    "On Linux systems running PipeWire or PulseAudio, PhoneMic creates PhoneMic_Sink and PhoneMic_Virtual_Mic automatically so Discord, OBS, and browsers can use your phone as a microphone. Turn this off if you manage sinks manually.",
+    "toggle", short="Auto virtual mic", keywords="pipewire pulseaudio virtual mic linux sink")
+cfg("audio.linux_cleanup_virtual_mic", "devices", "output", "Remove virtual mic on exit",
+    "Unloads session virtual microphone modules when closing the app.",
+    "Removes the PhoneMic virtual sink and source created during this session when you quit, keeping your desktop sound devices clean. Disable this if you want PhoneMic_Virtual_Mic to remain active.",
+    "toggle", short="Remove on exit", keywords="pipewire pulseaudio cleanup unload linux")
 add(key="audio.jitter_ms", target="cfg", page="devices", group="latency", label="Delay profile",
     summary="How much audio is held back to smooth out network hiccups.",
     details="Wi-Fi delivers audio in uneven bursts. The receiver keeps a small cushion so those bursts do not become gaps. "
@@ -423,11 +430,12 @@ cfg("network.accept_raw", "network", "options", "Accept plain audio packets", "C
     "traffic as noise.", "toggle", advanced=True, short="Accept plain audio packets")
 
 # ---- settings --------------------------------------------------------------------------------------------------------
-add(key="sys.start_with_windows", target="sys", page="settings", group="general", label="Start with Windows",
-    summary="Opens the receiver when you sign in.", details="The app starts minimized so it is ready when you open the phone app.",
-    kind="toggle", short="Start with Windows", keywords="startup boot autostart login")
-cfg("app.start_minimized", "settings", "general", "Start minimized", "Opens to the taskbar instead of a window.",
-    "Handy together with Start with Windows. You can still open the window from the taskbar.", "toggle", short="Start minimized")
+add(key="sys.start_with_windows", target="sys", page="settings", group="general", label="Start at login",
+    summary="Opens the receiver when you sign in to your desktop.",
+    details="The app starts minimized so it is ready when you open the phone app. Creates a startup entry on Windows or an autostart desktop entry on Linux.",
+    kind="toggle", short="Start at login", keywords="startup boot autostart login windows linux")
+cfg("app.start_minimized", "settings", "general", "Start minimized", "Opens minimized instead of taking over the screen.",
+    "Handy together with Start at login. You can still open the window from the taskbar or system tray.", "toggle", short="Start minimized")
 cfg("app.always_on_top", "settings", "general", "Always on top", "Keeps this window above other apps.",
     "Useful while you adjust settings during a game or a call. It can get in the way otherwise.", "toggle", short="Always on top")
 cfg("app.tray_icon", "settings", "general", "Tray icon", "Shows an icon near the clock with quick controls.",
@@ -466,17 +474,21 @@ for _key, _label, _summary, _details in (
     add(key=f"hotkeys.{_key}", target="cfg", page="settings", group="shortcuts", label=_label, summary=_summary, details=_details,
         kind="custom", needs="hotkeys.enabled", short=_label.replace(" shortcut", "").replace(" key", ""), keywords="hotkey keyboard key shortcut")
 cfg("hotkeys.sound_cues", "settings", "shortcuts", "Sound cues", "Plays a short beep when a shortcut mutes or unmutes you.",
-    "The beep plays through your Windows default sound device, not through the receiver's output, so other people do not hear it. "
-    "If your Windows default device is VB-CABLE, leave this off or they will.", "toggle", needs="hotkeys.enabled", short="Sound cues",
+    "The beep plays through your system default speaker device, not through the receiver output, so other people do not hear it. Leave this off if a virtual cable is set as your OS default output.",
+    "toggle", needs="hotkeys.enabled", short="Sound cues",
     keywords="beep audio feedback")
 cfg("app.ui_fps", "settings", "appearance", "Animation smoothness", "How often meters and graphs redraw.",
     "30 frames per second looks smooth and is light on the processor. 15 saves a little more power on slow computers. "
     "The meters are not drawn while the window is minimized.", "choice",
     choices=((15, "15 frames/s"), (30, "30 frames/s"), (60, "60 frames/s")), short="Animation smoothness")
-cfg("app.accent", "settings", "appearance", "Accent colour", "The highlight colour used across the app.",
-    "Changes sliders, switches and highlights. Applies the next time the app starts.", "choice",
-    choices=(("teal", "Teal"), ("blue", "Blue"), ("violet", "Violet"), ("amber", "Amber"), ("rose", "Rose")),
-    short="Accent colour", restart=True, keywords="theme color")
+cfg("app.accent", "settings", "appearance", "Accent & color preset", "Highlight theme or pure black-to-gray dark mode.",
+    "Choose an accent color or switch to Monochrome Dark for pure black-to-gray gradients. Applies immediately across every open panel.", "choice",
+    choices=(("teal", "Cyan"), ("blue", "Studio Blue"), ("indigo", "Soft Indigo"), ("amber", "Warm Amber"),
+             ("rose", "Soft Rose"), ("mono", "Monochrome Dark (Black-Gray)")),
+    short="Theme preset", keywords="theme color dark monochrome gray black")
+cfg("app.soft_colors", "settings", "appearance", "Eye-comfort soft colors", "Softens highlight tones to reduce glare on the eyes.",
+    "Tones down vivid cyan, blue and indicator saturation across dark panels without turning the interface full grayscale. Applies immediately.",
+    "toggle", short="Eye-comfort colors", keywords="soft eye comfort muted pastel glare theme color")
 cfg("recording.source", "settings", "recording", "Recording content", "Whether recordings include your effects.",
     "With effects records exactly what other apps hear. Raw microphone records the untouched phone signal, which is useful if "
     "you want to edit the sound yourself later.", "choice",

@@ -1,40 +1,100 @@
-"""Small, dependency-free widget kit for the dark UI (pure Tkinter, canvas-drawn so it looks identical everywhere)."""
+"""Obsidian / Graphite UI widget kit built on CustomTkinter with Canvas visualizers.
+
+Falls back cleanly to pure Tkinter if CustomTkinter is absent or in headless fake_tk environments.
+"""
 import sys
 import math
 import tkinter as tk
 from tkinter import ttk
 
+try:
+    import customtkinter as ctk
+    HAS_CTK = True
+except Exception:
+    ctk = None
+    HAS_CTK = False
+
 IS_WIN = sys.platform.startswith("win")
-FONT = "Segoe UI" if IS_WIN else "Helvetica"
+IS_LINUX = sys.platform.startswith("linux")
+FONT = "Segoe UI" if IS_WIN else "DejaVu Sans"
+MONO_FONT = "Consolas" if IS_WIN else "DejaVu Sans Mono"
 
 
 class Theme:
-    """Graphite console palette. Text colours are checked for WCAG AA contrast in the test-suite."""
-    BG = "#1b1f26"          # window
-    SIDEBAR = "#151920"     # navigation rail
-    SURFACE = "#232830"     # panels
-    SURFACE2 = "#2b313b"    # inputs, inactive controls, panel headers
-    SURFACE3 = "#363e4b"    # hover, slider tracks
-    BORDER = "#3a4352"
-    TEXT = "#e9edf3"
-    MUTED = "#b4bcc9"
-    DIM = "#949eae"
-    ACCENT = "#35c6c3"
-    ACCENT_HI = "#7fe3df"
-    ACCENT_FG = "#06201f"
-    GOOD = "#4cd48a"
-    WARN = "#ffb547"
-    BAD = "#ff6c71"
-    VIOLET = "#a78bfa"
+    """Matte Obsidian & Graphite palette with restrained multi-color accents (WCAG AA checked)."""
+    BG = "#07080B"          # true obsidian window background
+    SIDEBAR = "#0B0D12"     # deep graphite navigation rail
+    SURFACE = "#11141B"     # primary card surface
+    SURFACE2 = "#171B24"    # inputs, recessed controls, headers
+    SURFACE3 = "#202633"    # hover states, muted tracks
+    BORDER = "#232A38"      # crisp 1px card border
+    BORDER_HI = "#333D52"   # highlighted border
+    TEXT = "#EEF2F8"        # crisp matte off-white ink
+    MUTED = "#ACB6C6"       # secondary readable copy
+    DIM = "#8B96AA"         # subtle caption / hint copy (>= 4.5:1 on SURFACE2)
+    ACCENT = "#36AEBF"      # matte cyan-teal primary accent
+    ACCENT_HI = "#5CD0E0"   # matte cyan highlight
+    ACCENT_FG = "#04161D"   # high-contrast text on primary accent fill
+    GOOD = "#42BF8F"        # matte emerald (live / healthy / USB)
+    WARN = "#DFA946"        # matte amber (mute / standby / peak mid)
+    BAD = "#DE7286"         # matte crimson-rose (record / clip / error)
+    BLUE = "#6398DF"        # matte studio blue (voice changer / EQ / ethernet)
+    BLUE_HI = "#91BBF2"     # matte light studio blue
+    SOFT_COLORS = False
+    IS_MONO = False
 
 
-ACCENTS = {   # (accent, highlight, text on accent)
-    "teal": ("#35c6c3", "#7fe3df", "#06201f"),
-    "blue": ("#4aa3ff", "#8cc4ff", "#04131f"),
-    "violet": ("#9b87ff", "#c1b5ff", "#120c2e"),
-    "amber": ("#ffb547", "#ffd08a", "#2a1a00"),
-    "rose": ("#ff7aa8", "#ffa6c4", "#2e0a18"),
+ACCENTS = {   # (matte accent, highlight, text_on_accent)
+    "teal": ("#36AEBF", "#5CD0E0", "#04161D"),
+    "blue": ("#6398DF", "#91BBF2", "#051326"),
+    "indigo": ("#768CE0", "#A5B5F2", "#08102A"),
+    "amber": ("#DFA946", "#EBC16E", "#241702"),
+    "rose": ("#DE7286", "#EC9AA9", "#28080F"),
+    "mono": ("#C4CEDB", "#E4EAF2", "#07080B"),
 }
+
+SOFT_ACCENTS = {   # gentler matte saturation for eye comfort (WCAG AA checked)
+    "teal": ("#4AAAB9", "#7CC6D2", "#05191F"),
+    "blue": ("#6B95CA", "#96B7E0", "#071422"),
+    "indigo": ("#7B8ECD", "#A6B5E2", "#0B1124"),
+    "amber": ("#CFA04D", "#E2BA74", "#221704"),
+    "rose": ("#D37385", "#E49BA8", "#26080F"),
+    "mono": ("#B4BECB", "#DAE1EB", "#07080B"),
+}
+
+_NORMAL_SEMANTIC = {
+    "TEXT": "#EEF2F8",
+    "MUTED": "#ACB6C6",
+    "DIM": "#8B96AA",
+    "GOOD": "#42BF8F",
+    "WARN": "#DFA946",
+    "BAD": "#DE7286",
+    "BLUE": "#6398DF",
+    "BLUE_HI": "#91BBF2",
+}
+
+_SOFT_SEMANTIC = {
+    "TEXT": "#E1E6EE",
+    "MUTED": "#A5B0C0",
+    "DIM": "#8894A6",
+    "GOOD": "#5AB289",
+    "WARN": "#CFA04D",
+    "BAD": "#D37385",
+    "BLUE": "#6B95CA",
+    "BLUE_HI": "#96B7E0",
+}
+
+_MONO_SEMANTIC = {
+    "TEXT": "#EBEEF2",
+    "MUTED": "#B2BAC6",
+    "DIM": "#8D96A4",
+    "GOOD": "#CBD3DF",
+    "WARN": "#A8B2C0",
+    "BAD": "#E2E6EC",
+    "BLUE": "#98A2B2",
+    "BLUE_HI": "#C4CEDB",
+}
+
 T = Theme
 _SCALE = 1.0
 
@@ -48,16 +108,28 @@ def dp(x):
     return max(1, int(round(x * _SCALE))) if x else 0
 
 
-FONT_DISPLAY = FONT          # replaced by init_fonts() when a more distinctive installed font is found
+FONT_DISPLAY = FONT          # replaced by init_fonts() when Bahnschrift (Win) or Linux sans fonts are installed
 
 
 def init_fonts(root):
-    """Numbers and titles use Bahnschrift (an industrial DIN-style face that ships with Windows 10 and 11)."""
-    global FONT_DISPLAY
+    """Select crisp display/body/mono fonts for the host platform."""
+    global FONT, FONT_DISPLAY, MONO_FONT
     try:
         import tkinter.font as tkfont
         families = set(tkfont.families(root))
-        FONT_DISPLAY = "Bahnschrift" if "Bahnschrift" in families else FONT
+        if IS_WIN:
+            FONT_DISPLAY = "Bahnschrift" if "Bahnschrift" in families else FONT
+            MONO_FONT = "Consolas"
+        else:
+            for candidate in ("Noto Sans", "Inter", "Ubuntu", "Cantarell", "Liberation Sans", "DejaVu Sans", "Helvetica"):
+                if candidate in families:
+                    FONT = candidate
+                    break
+            FONT_DISPLAY = FONT
+            for mcandidate in ("JetBrains Mono", "Noto Sans Mono", "Ubuntu Mono", "Liberation Mono", "DejaVu Sans Mono", "Courier"):
+                if mcandidate in families:
+                    MONO_FONT = mcandidate
+                    break
     except Exception:
         FONT_DISPLAY = FONT
 
@@ -66,11 +138,81 @@ def font(size=10, weight="normal", display=False):
     return (FONT_DISPLAY if display else FONT, size, weight)
 
 
-def apply_accent(name):
-    """Switch the accent colour. Must run before any widget is created (colours are read at creation time)."""
-    acc, hi, fg = ACCENTS.get(name, ACCENTS["teal"])
+def create_root():
+    """Create main window root using CustomTkinter when available (with deterministic dp() scaling)."""
+    if HAS_CTK:
+        ctk.set_appearance_mode("dark")
+        try:
+            root = ctk.CTk(fg_color=T.BG, className="PhoneMicReceiver")
+        except TypeError:
+            root = ctk.CTk(fg_color=T.BG)
+        try:
+            # Keep scaling unified through PhoneMic's dp() helper so raw tk.Canvas and CTk widgets match 1:1 on Win 10/11
+            ctk.set_widget_scaling(1.0)
+            ctk.set_window_scaling(1.0)
+        except Exception:
+            pass
+        return root
+    try:
+        return tk.Tk(className="PhoneMicReceiver")
+    except TypeError:
+        return tk.Tk()
+
+
+def create_toplevel(parent, fg_color=None):
+    """Create a dark CustomTkinter toplevel dialog when available."""
+    bg = fg_color or T.SURFACE
+    if HAS_CTK:
+        win = ctk.CTkToplevel(parent, fg_color=bg)
+        return win
+    win = tk.Toplevel(parent)
+    win.configure(bg=bg)
+    return win
+
+
+def bg_of(widget, default=None):
+    """Safely read an explicit hex background from either CTk* or tk.* containers."""
+    if widget is None:
+        return default or T.SURFACE
+    try:
+        c = widget.cget("fg_color")
+        if isinstance(c, (tuple, list)):
+            c = c[1] if len(c) > 1 else c[0]
+        if isinstance(c, str) and c.startswith("#"):
+            return c
+    except Exception:
+        pass
+    try:
+        c = widget.cget("bg")
+        if isinstance(c, str) and c.startswith("#"):
+            return c
+    except Exception:
+        pass
+    return default or T.SURFACE
+
+
+def apply_theme(name, soft=False):
+    """Apply active accent preset (including 'mono') and optional soft eye-comfort palette."""
+    key = "blue" if name == "violet" else (name if name in ACCENTS else "teal")
+    T.IS_MONO = (key == "mono")
+    T.SOFT_COLORS = bool(soft)
+    if T.IS_MONO:
+        tokens = _MONO_SEMANTIC
+    elif T.SOFT_COLORS:
+        tokens = _SOFT_SEMANTIC
+    else:
+        tokens = _NORMAL_SEMANTIC
+    for attr, val in tokens.items():
+        setattr(T, attr, val)
+    palette = SOFT_ACCENTS if T.SOFT_COLORS else ACCENTS
+    acc, hi, fg = palette.get(key, palette["teal"])
     T.ACCENT, T.ACCENT_HI, T.ACCENT_FG = acc, hi, fg
     FlatButton.rebuild_styles()
+
+
+def apply_accent(name, soft=None):
+    """Switch the accent colour before widgets are constructed (or live)."""
+    apply_theme(name, soft=T.SOFT_COLORS if soft is None else soft)
 
 
 def lerp_color(c1, c2, t):
@@ -81,7 +223,7 @@ def lerp_color(c1, c2, t):
 
 
 # ==============================================================================
-# TTK STYLES
+# TTK FALLBACK STYLES (for headless / minimal ttk widgets)
 # ==============================================================================
 def apply_styles(root):
     st = ttk.Style(root)
@@ -100,87 +242,211 @@ def apply_styles(root):
     st.configure("PM.Vertical.TScrollbar", troughcolor=T.BG, background=T.SURFACE3, bordercolor=T.BG,
                  arrowcolor=T.MUTED, lightcolor=T.SURFACE3, darkcolor=T.SURFACE3, relief="flat", gripcount=0)
     st.map("PM.Vertical.TScrollbar", background=[("active", T.DIM)])
-    root.option_add("*TCombobox*Listbox.background", T.SURFACE2)
-    root.option_add("*TCombobox*Listbox.foreground", T.TEXT)
-    root.option_add("*TCombobox*Listbox.selectBackground", T.ACCENT)
-    root.option_add("*TCombobox*Listbox.selectForeground", T.ACCENT_FG)
-    root.option_add("*TCombobox*Listbox.font", font(10))
-    root.option_add("*TCombobox*Listbox.borderWidth", 0)
+    try:
+        root.option_add("*TCombobox*Listbox.background", T.SURFACE2)
+        root.option_add("*TCombobox*Listbox.foreground", T.TEXT)
+        root.option_add("*TCombobox*Listbox.selectBackground", T.ACCENT)
+        root.option_add("*TCombobox*Listbox.selectForeground", T.ACCENT_FG)
+        root.option_add("*TCombobox*Listbox.font", font(10))
+        root.option_add("*TCombobox*Listbox.borderWidth", 0)
+    except Exception:
+        pass
 
 
 # ==============================================================================
-# SIMPLE CONTROLS
+# HELPERS & CONTROLS
 # ==============================================================================
 def autowrap(label, pad=6):
-    """Wrap a label's text to its *actual* width (a fixed wraplength overflows narrow columns and gets clipped)."""
+    """Wrap a label's text to its real allocated width without synchronous <Configure> loops."""
+    def apply_wrap(target_w):
+        label._wrap_job = None
+        try:
+            if not label.winfo_exists():
+                return
+            current = int(str(label.cget("wraplength")) or 0)
+            if abs(current - target_w) > dp(2):
+                label.configure(wraplength=target_w)
+        except Exception:
+            pass
+
     def on_configure(e):
-        w = max(80, e.width - dp(pad))
+        if not e.width or e.width < dp(40):
+            return
+        w = max(dp(80), e.width - dp(pad))
         try:
             current = int(str(label.cget("wraplength")) or 0)
         except ValueError:
             current = 0
-        if current != w:
-            label.configure(wraplength=w)
+        if abs(current - w) <= dp(2):
+            return
+        job = getattr(label, "_wrap_job", None)
+        if job:
+            try:
+                label.after_cancel(job)
+            except Exception:
+                pass
+        label._wrap_job = label.after(16, lambda tw=w: apply_wrap(tw))
+
     label.bind("<Configure>", on_configure, add="+")
     return label
 
 
-class FlatButton(tk.Label):
-    """Flat label-button with hover/press feedback. style: normal | primary | danger | ghost | active"""
+_ButtonBase = ctk.CTkButton if HAS_CTK else tk.Label
+
+
+class FlatButton(_ButtonBase):
+    """Rounded Obsidian button with semantic variants: normal | primary | danger | ghost | active | rec | warn | blue."""
     STYLES = {}
+    BORDERS = {}
 
     @classmethod
     def rebuild_styles(cls):
         accent_active = lerp_color(T.SURFACE, T.ACCENT, 0.22)
-        cls.STYLES = {
-            "normal": (T.SURFACE2, T.SURFACE3, T.TEXT),
-            "primary": (T.ACCENT, T.ACCENT_HI, T.ACCENT_FG),
-            "danger": ("#4a2229", "#612b34", "#ff9aa2"),
-            "ghost": (T.SURFACE, T.SURFACE2, T.MUTED),
-            "active": (accent_active, lerp_color(T.SURFACE, T.ACCENT, 0.32), T.ACCENT_HI),
-            "rec": (T.BAD, "#ff7f84", "#2b0409"),
-            "warn": ("#4d3a10", "#634c16", T.WARN),
-        }
+        accent_hover = lerp_color(T.SURFACE, T.ACCENT, 0.34)
+        if T.IS_MONO:
+            cls.STYLES = {
+                "normal": (T.SURFACE2, T.SURFACE3, T.TEXT),
+                "primary": (T.ACCENT, T.ACCENT_HI, T.ACCENT_FG),
+                "danger": ("#272B33", "#363B46", "#E5E7EB"),
+                "ghost": (T.SURFACE, T.SURFACE2, T.MUTED),
+                "active": (accent_active, accent_hover, T.ACCENT_HI),
+                "rec": (T.BAD, "#F8FAFC", "#0D0F14"),
+                "warn": ("#22262E", "#303540", T.WARN),
+                "blue": ("#1E222A", "#2C323E", "#CBD5E1"),
+            }
+            cls.BORDERS = {
+                "normal": T.BORDER,
+                "primary": T.ACCENT,
+                "danger": "#4B5262",
+                "ghost": T.BORDER,
+                "active": T.ACCENT,
+                "rec": T.BAD,
+                "warn": "#464C5B",
+                "blue": T.BLUE,
+            }
+        elif T.SOFT_COLORS:
+            cls.STYLES = {
+                "normal": (T.SURFACE2, T.SURFACE3, T.TEXT),
+                "primary": (T.ACCENT, T.ACCENT_HI, T.ACCENT_FG),
+                "danger": ("#351820", "#4A222D", "#F0A8B4"),
+                "ghost": (T.SURFACE, T.SURFACE2, T.MUTED),
+                "active": (accent_active, accent_hover, T.ACCENT_HI),
+                "rec": (T.BAD, "#E899A8", "#22060C"),
+                "warn": ("#36270B", "#4A3510", T.WARN),
+                "blue": ("#162336", "#20334E", "#96B7E0"),
+            }
+            cls.BORDERS = {
+                "normal": T.BORDER,
+                "primary": T.ACCENT,
+                "danger": "#632A38",
+                "ghost": T.BORDER,
+                "active": T.ACCENT,
+                "rec": T.BAD,
+                "warn": "#6E4F18",
+                "blue": T.BLUE,
+            }
+        else:
+            cls.STYLES = {
+                "normal": (T.SURFACE2, T.SURFACE3, T.TEXT),
+                "primary": (T.ACCENT, T.ACCENT_HI, T.ACCENT_FG),
+                "danger": ("#381620", "#4E1E2B", "#F5A5B2"),
+                "ghost": (T.SURFACE, T.SURFACE2, T.MUTED),
+                "active": (accent_active, accent_hover, T.ACCENT_HI),
+                "rec": (T.BAD, "#EC9AA9", "#26050B"),
+                "warn": ("#382809", "#4E370E", T.WARN),
+                "blue": ("#152236", "#1E314D", "#91BBF2"),
+            }
+            cls.BORDERS = {
+                "normal": T.BORDER,
+                "primary": T.ACCENT,
+                "danger": "#682436",
+                "ghost": T.BORDER,
+                "active": T.ACCENT,
+                "rec": T.BAD,
+                "warn": "#725014",
+                "blue": T.BLUE,
+            }
 
-    def __init__(self, master, text="", command=None, style="normal", padx=12, pady=6, size=10, weight="normal", **kw):
+    def __init__(self, master, text="", command=None, style="normal", padx=12, pady=6, size=10, weight="normal", corner=7, **kw):
         self.style_name = style
-        bg, _, fg = self.STYLES[style]
-        super().__init__(master, text=text, bg=bg, fg=fg, font=font(size, weight), padx=dp(padx), pady=dp(pady),
-                         cursor="hand2", **kw)
         self.command = command
         self._enabled = True
         self._down = False
-        self.bind("<Enter>", self._enter)
-        self.bind("<Leave>", self._leave)
-        self.bind("<ButtonPress-1>", self._press)
-        self.bind("<ButtonRelease-1>", self._release)
+        bg, hover, fg = self.STYLES[style]
+        border_col = self.BORDERS.get(style, T.BORDER)
+        if HAS_CTK:
+            h_px = dp(max(24, int(size * 1.9 + pady * 1.6)))
+            min_w = dp(max(24, int(padx * 2))) if padx else 0
+            bw = 0 if style == "primary" else 1
+            super().__init__(
+                master,
+                text=text,
+                command=self._invoke,
+                fg_color=bg,
+                hover_color=hover,
+                text_color=fg,
+                text_color_disabled=T.DIM,
+                border_color=border_col,
+                border_width=bw,
+                corner_radius=dp(corner),
+                height=h_px,
+                width=min_w,
+                font=font(size, weight),
+                cursor="hand2",
+                **kw,
+            )
+        else:
+            super().__init__(master, text=text, bg=bg, fg=fg, font=font(size, weight), padx=dp(padx), pady=dp(pady),
+                             cursor="hand2", **kw)
+            self.bind("<Enter>", self._tk_enter)
+            self.bind("<Leave>", self._tk_leave)
+            self.bind("<ButtonPress-1>", self._tk_press)
+            self.bind("<ButtonRelease-1>", self._tk_release)
+
+    def _invoke(self):
+        if self._enabled and self.command:
+            self.command()
 
     def _colors(self):
         return self.STYLES[self.style_name]
 
-    def _enter(self, _e=None):
-        if self._enabled:
+    def _tk_enter(self, _e=None):
+        if not HAS_CTK and self._enabled:
             self.configure(bg=self._colors()[1])
 
-    def _leave(self, _e=None):
+    def _tk_leave(self, _e=None):
         self._down = False
-        self.configure(bg=self._colors()[0])
+        if not HAS_CTK:
+            self.configure(bg=self._colors()[0])
 
-    def _press(self, _e=None):
+    def _tk_press(self, _e=None):
         self._down = True
 
-    def _release(self, e):
+    def _tk_release(self, e):
         was = self._down
         self._down = False
-        if self._enabled and was and 0 <= e.x < self.winfo_width() and 0 <= e.y < self.winfo_height():
+        if not HAS_CTK and self._enabled and was and 0 <= e.x < self.winfo_width() and 0 <= e.y < self.winfo_height():
             if self.command:
                 self.command()
+
+    def refresh_theme(self):
+        old = self.style_name
+        self.style_name = None
+        self.set_style(old)
+        if not self._enabled:
+            self.set_enabled(False)
 
     def set_style(self, style):
         if style != self.style_name:
             self.style_name = style
-            bg, _, fg = self._colors()
-            self.configure(bg=bg, fg=fg)
+            bg, hover, fg = self._colors()
+            if HAS_CTK:
+                bcol = self.BORDERS.get(style, T.BORDER)
+                bw = 0 if style == "primary" else 1
+                self.configure(fg_color=bg, hover_color=hover, text_color=fg if self._enabled else T.DIM,
+                               text_color_disabled=T.DIM, border_color=bcol, border_width=bw)
+            else:
+                self.configure(bg=bg, fg=fg if self._enabled else T.DIM)
 
     def set_text(self, text):
         if self.cget("text") != text:
@@ -188,24 +454,65 @@ class FlatButton(tk.Label):
 
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
-        bg, _, fg = self._colors()
-        self.configure(bg=bg, fg=fg if enabled else T.DIM, cursor="hand2" if enabled else "arrow")
+        bg, hover, fg = self._colors()
+        if HAS_CTK:
+            self.configure(state="normal" if enabled else "disabled",
+                           fg_color=bg, hover_color=hover, text_color=fg if enabled else T.DIM,
+                           cursor="hand2" if enabled else "arrow")
+        else:
+            self.configure(bg=bg, fg=fg if enabled else T.DIM, cursor="hand2" if enabled else "arrow")
 
 
-class Toggle(tk.Canvas):
-    """iOS-style switch. set() never fires the command; user clicks do."""
+_ToggleBase = ctk.CTkSwitch if HAS_CTK else tk.Canvas
+
+
+class Toggle(_ToggleBase):
+    """Pill switch. set() never fires the command; user clicks do."""
 
     def __init__(self, master, value=False, command=None, bg=None):
-        self.w, self.h = dp(40), dp(22)
-        super().__init__(master, width=self.w, height=self.h, bg=bg or master.cget("bg"), highlightthickness=0, bd=0,
-                         cursor="hand2")
         self.value = bool(value)
         self.command = command
         self._enabled = True
-        self.bind("<Button-1>", self._click)
-        self._draw()
+        self._suppress = False
+        host_bg = bg or bg_of(master)
+        if HAS_CTK:
+            super().__init__(
+                master,
+                text="",
+                width=dp(44),
+                height=dp(24),
+                switch_width=dp(40),
+                switch_height=dp(22),
+                corner_radius=dp(11),
+                fg_color=T.SURFACE3,
+                progress_color=T.ACCENT,
+                button_color=T.TEXT,
+                button_hover_color="#FFFFFF",
+                bg_color=host_bg,
+                command=self._ctk_changed,
+                cursor="hand2",
+            )
+            if self.value:
+                self._suppress = True
+                super().select()
+                self._suppress = False
+        else:
+            self.w, self.h = dp(40), dp(22)
+            super().__init__(master, width=self.w, height=self.h, bg=host_bg, highlightthickness=0, bd=0,
+                             cursor="hand2")
+            self.bind("<Button-1>", self._click)
+            self._draw_fallback()
 
-    def _draw(self):
+    def _ctk_changed(self):
+        if self._suppress or not self._enabled:
+            return
+        self.value = bool(super().get())
+        if self.command:
+            self.command(self.value)
+
+    def _draw_fallback(self):
+        if HAS_CTK:
+            return
         self.delete("all")
         w, h = self.w, self.h
         on = self.value
@@ -221,43 +528,88 @@ class Toggle(tk.Canvas):
     def _click(self, _e=None):
         if not self._enabled:
             return
-        self.value = not self.value
-        self._draw()
-        if self.command:
-            self.command(self.value)
+        if HAS_CTK:
+            self.value = not self.value
+            self._suppress = True
+            if self.value:
+                super().select()
+            else:
+                super().deselect()
+            self._suppress = False
+            if self.command:
+                self.command(self.value)
+        else:
+            self.value = not self.value
+            self._draw_fallback()
+            if self.command:
+                self.command(self.value)
 
     def set(self, value, notify=False):
         value = bool(value)
         if value != self.value:
             self.value = value
-            self._draw()
+            if HAS_CTK:
+                self._suppress = True
+                if value:
+                    super().select()
+                else:
+                    super().deselect()
+                self._suppress = False
+            else:
+                self._draw_fallback()
         if notify and self.command:
             self.command(self.value)
 
     def get(self):
+        if HAS_CTK:
+            return bool(super().get())
         return self.value
 
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
-        self._draw()
+        if HAS_CTK:
+            self.configure(
+                state="normal" if enabled else "disabled",
+                progress_color=T.ACCENT if enabled else T.SURFACE3,
+                button_color=T.TEXT if enabled else T.DIM,
+                cursor="hand2" if enabled else "arrow",
+            )
+        else:
+            self._draw_fallback()
+
+    def refresh_theme(self, bg=None):
+        if HAS_CTK:
+            kw = dict(fg_color=T.SURFACE3, progress_color=T.ACCENT if self._enabled else T.SURFACE3,
+                      button_color=T.TEXT if self._enabled else T.DIM)
+            if bg:
+                kw["bg_color"] = bg
+            self.configure(**kw)
+        else:
+            if bg:
+                self.configure(bg=bg)
+            self._draw_fallback()
 
 
 class Slider(tk.Canvas):
-    """Horizontal slider. `origin` makes bipolar sliders fill from the centre. Double-click resets to `default`."""
+    """Precision horizontal slider with bipolar origin, log scale, mousewheel & double-click reset."""
 
     def __init__(self, master, from_=0.0, to=1.0, value=0.0, step=0.01, default=None, origin=None, command=None,
                  bg=None, accent=None, log=False):
-        super().__init__(master, width=dp(100), height=dp(24), bg=bg or master.cget("bg"), highlightthickness=0, bd=0,
+        super().__init__(master, width=dp(100), height=dp(26), bg=bg or bg_of(master), highlightthickness=0, bd=0,
                          cursor="hand2", takefocus=1)
         self.lo, self.hi, self.step = float(from_), float(to), float(step)
-        self.log = bool(log)                       # logarithmic travel for frequencies and Q
+        self.log = bool(log)
         self.default = default if default is not None else value
         self.origin = origin
         self.command = command
         self.accent = accent or T.ACCENT
         self.value = self._clamp(value)
         self._enabled = True
+        self._hovering = False
+        self._draw_key = None
         self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
         self.bind("<Button-1>", self._down)
         self.bind("<B1-Motion>", self._drag)
         self.bind("<Double-Button-1>", self._reset)
@@ -267,9 +619,15 @@ class Slider(tk.Canvas):
         self.bind("<Left>", lambda e: self._nudge(-1))
         self.bind("<Right>", lambda e: self._nudge(1))
 
+    def _set_hover(self, flag):
+        if flag == self._hovering:
+            return
+        self._hovering = flag
+        self._draw()
+
     def _clamp(self, v):
         v = min(self.hi, max(self.lo, float(v)))
-        if self.log:                               # keep three significant figures
+        if self.log:
             v = float(f"{v:.3g}")
         elif self.step > 0:
             v = round(round((v - self.lo) / self.step) * self.step + self.lo, 6)
@@ -286,7 +644,7 @@ class Slider(tk.Canvas):
         return self.lo + frac * (self.hi - self.lo)
 
     def _geom(self):
-        pad = dp(9)
+        pad = dp(10)
         return pad, max(pad + 1, self.winfo_width() - pad)
 
     def _x_of(self, v):
@@ -294,20 +652,30 @@ class Slider(tk.Canvas):
         return x0 + self._frac(v) * (x1 - x0)
 
     def _draw(self):
+        w = self.winfo_width() or dp(100)
+        h = self.winfo_height() or dp(26)
+        key = (w, h, round(self.value, 6), self._enabled, self._hovering, self.accent, T.SURFACE3, T.TEXT, T.BORDER_HI)
+        if key == self._draw_key:
+            return
+        self._draw_key = key
         self.delete("all")
-        h = self.winfo_height() or dp(24)
         cy = h / 2
         x0, x1 = self._geom()
         acc = self.accent if self._enabled else T.DIM
-        self.create_line(x0, cy, x1, cy, width=dp(4), capstyle="round", fill=T.SURFACE3)
+        # Outer obsidian track groove
+        self.create_line(x0, cy, x1, cy, width=dp(5), capstyle="round", fill=T.SURFACE3)
         xv = self._x_of(self.value)
         xo = self._x_of(self.origin) if self.origin is not None else x0
         if abs(xv - xo) > 0.5:
-            self.create_line(xo, cy, xv, cy, width=dp(4), capstyle="round", fill=acc)
+            self.create_line(xo, cy, xv, cy, width=dp(5), capstyle="round", fill=acc)
         if self.origin is not None:
-            self.create_line(xo, cy - dp(5), xo, cy + dp(5), width=1, fill=T.DIM)
+            self.create_line(xo, cy - dp(6), xo, cy + dp(6), width=1, fill=T.BORDER_HI)
+        if self._hovering and self._enabled:
+            hr = dp(10)
+            self.create_oval(xv - hr, cy - hr, xv + hr, cy + hr, fill=lerp_color(T.SURFACE, acc, 0.25), outline="")
         r = dp(7)
-        self.create_oval(xv - r, cy - r, xv + r, cy + r, fill="#f4f8fc" if self._enabled else T.MUTED, outline=acc, width=dp(2))
+        self.create_oval(xv - r, cy - r, xv + r, cy + r, fill=T.TEXT if self._enabled else T.MUTED,
+                         outline=acc, width=dp(2))
 
     def _from_x(self, x):
         x0, x1 = self._geom()
@@ -338,7 +706,7 @@ class Slider(tk.Canvas):
     def _wheel(self, e):
         try:
             focused = self.focus_get() is self
-        except Exception:                       # tkinter raises KeyError('popdown') while a combobox list is open
+        except Exception:
             focused = False
         if self._enabled and focused:
             self._nudge(1 if e.delta > 0 else -1)
@@ -347,7 +715,7 @@ class Slider(tk.Canvas):
     def _nudge(self, direction):
         if not self._enabled:
             return
-        if self.log:                               # one nudge = 2 % of the travel
+        if self.log:
             self._apply(self._value_at(min(1.0, max(0.0, self._frac(self.value) + direction * 0.02))))
         else:
             self._apply(self.value + direction * (self.step or (self.hi - self.lo) / 100.0))
@@ -370,14 +738,14 @@ class LabeledSlider(tk.Frame):
 
     def __init__(self, master, label, from_, to, value, step, fmt=None, command=None, default=None, origin=None,
                  bg=None, hint=None, accent=None):
-        bg = bg or master.cget("bg")
+        bg = bg or bg_of(master)
         super().__init__(master, bg=bg)
         self.fmt = fmt or (lambda v: f"{v:g}")
         self.user_command = command
         top = tk.Frame(self, bg=bg)
         top.pack(fill="x")
         tk.Label(top, text=label, bg=bg, fg=T.TEXT, font=font(10)).pack(side="left")
-        self.value_label = tk.Label(top, text="", bg=bg, fg=T.ACCENT_HI, font=font(10, "bold"))
+        self.value_label = tk.Label(top, text="", bg=bg, fg=T.ACCENT_HI, font=font(10, "bold", True))
         self.value_label.pack(side="right")
         self.slider = Slider(self, from_, to, value, step, default=default, origin=origin, command=self._changed,
                              bg=bg, accent=accent)
@@ -408,7 +776,7 @@ class SwitchRow(tk.Frame):
     """Toggle with a title and optional description on one row."""
 
     def __init__(self, master, title, value=False, command=None, desc=None, bg=None):
-        bg = bg or master.cget("bg")
+        bg = bg or bg_of(master)
         super().__init__(master, bg=bg)
         text = tk.Frame(self, bg=bg)
         text.pack(side="left", fill="x", expand=True)
@@ -426,24 +794,32 @@ class SwitchRow(tk.Frame):
         return self.toggle.get()
 
 
-class Segmented(tk.Frame):
-    """Row of mutually exclusive buttons. options = [(key, text), ...]"""
+_FrameBase = ctk.CTkFrame if HAS_CTK else tk.Frame
 
-    def __init__(self, master, options, value=None, command=None, bg=None, size=9):
-        bg = bg or master.cget("bg")
-        super().__init__(master, bg=bg)
+
+class Segmented(_FrameBase):
+    """Rounded pill container of mutually exclusive buttons. options = [(key, text), ...]"""
+
+    def __init__(self, master, options, value=None, command=None, bg=None, size=9, padx=9, pady=3):
+        if HAS_CTK:
+            super().__init__(master, fg_color=T.SURFACE2, corner_radius=dp(8), border_width=1, border_color=T.BORDER)
+        else:
+            super().__init__(master, bg=bg or bg_of(master))
         self.command = command
         self.value = value
         self.buttons = {}
+        inner_pad = dp(3) if HAS_CTK else 0
         for i, (key, text) in enumerate(options):
-            b = FlatButton(self, text, command=lambda k=key: self._pick(k), style="normal", padx=10, pady=4, size=size)
-            b.pack(side="left", padx=(0 if i == 0 else dp(2), 0))
+            init_style = "active" if key == self.value else ("ghost" if HAS_CTK else "normal")
+            b = FlatButton(self, text, command=lambda k=key: self._pick(k), style=init_style,
+                           padx=padx, pady=pady, size=size, corner=6)
+            b.pack(side="left", padx=(inner_pad if i == 0 else dp(2), inner_pad if i == len(options) - 1 else 0),
+                   pady=inner_pad)
             self.buttons[key] = b
-        self._paint()
 
     def _paint(self):
         for k, b in self.buttons.items():
-            b.set_style("active" if k == self.value else "normal")
+            b.set_style("active" if k == self.value else ("ghost" if HAS_CTK else "normal"))
 
     def _pick(self, key):
         if key != self.value:
@@ -461,13 +837,55 @@ class Segmented(tk.Frame):
     def get(self):
         return self.value
 
+    def refresh_theme(self, bg=None):
+        if HAS_CTK:
+            self.configure(fg_color=T.SURFACE2, border_color=T.BORDER)
+        else:
+            self.configure(bg=bg or bg_of(self.master))
+        for b in self.buttons.values():
+            b.refresh_theme()
 
-class Combo(ttk.Combobox):
+
+_ComboBase = ctk.CTkOptionMenu if HAS_CTK else ttk.Combobox
+
+
+class Combo(_ComboBase):
+    """Rounded dark dropdown menu."""
+
     def __init__(self, master, values=(), width=36, command=None):
-        super().__init__(master, values=list(values), state="readonly", width=width, style="PM.TCombobox",
-                         exportselection=False, font=font(10))
         self.command = command
-        self.bind("<<ComboboxSelected>>", self._selected)
+        self._items = list(values)
+        if HAS_CTK:
+            px_w = dp(max(130, min(420, int(width * 8.2))))
+            init_vals = self._items if self._items else [""]
+            super().__init__(
+                master,
+                values=init_vals,
+                width=px_w,
+                height=dp(30),
+                corner_radius=dp(8),
+                fg_color=T.SURFACE2,
+                button_color=T.SURFACE3,
+                button_hover_color=T.BORDER_HI,
+                dropdown_fg_color=T.SURFACE,
+                dropdown_hover_color=T.SURFACE3,
+                dropdown_text_color=T.TEXT,
+                text_color=T.TEXT,
+                text_color_disabled=T.DIM,
+                font=font(10),
+                dropdown_font=font(10),
+                command=self._ctk_selected,
+            )
+            if not self._items:
+                super().set("")
+        else:
+            super().__init__(master, values=self._items, state="readonly", width=width, style="PM.TCombobox",
+                             exportselection=False, font=font(10))
+            self.bind("<<ComboboxSelected>>", self._selected)
+
+    def _ctk_selected(self, choice):
+        if self.command and choice in self._items:
+            self.command(choice)
 
     def _selected(self, _e=None):
         self.selection_clear()
@@ -475,40 +893,74 @@ class Combo(ttk.Combobox):
             self.command(self.get())
 
     def set_values(self, values, current=None):
-        self.configure(values=list(values))
-        if current is not None:
-            self.set(current)
+        self._items = [str(v) for v in values if v is not None]
+        if HAS_CTK:
+            self.configure(values=self._items if self._items else [""])
+            if current is not None:
+                super().set(str(current))
+            elif self._items:
+                if super().get() not in self._items:
+                    super().set(self._items[0])
+            else:
+                super().set("")
+        else:
+            self.configure(values=self._items)
+            if current is not None:
+                self.set(str(current))
 
 
-class Card(tk.Frame):
-    """Surface panel with a title row. Put content in `.body`; add header widgets via `.header`."""
+class Card(_FrameBase):
+    """Obsidian card panel with crisp 1px border, rounded corners, `.header`, and `.body`."""
 
-    def __init__(self, master, title=None, subtitle=None, pad=14, bg=None, **kw):
-        super().__init__(master, bg=T.SURFACE, highlightthickness=1, highlightbackground=T.BORDER,
-                         highlightcolor=T.BORDER, bd=0, **kw)
+    def __init__(self, master, title=None, subtitle=None, pad=16, bg=None, accent_border=None, **kw):
+        card_bg = bg or T.SURFACE
+        border_col = accent_border or T.BORDER
+        if HAS_CTK:
+            super().__init__(master, fg_color=card_bg, corner_radius=dp(10), border_width=1, border_color=border_col, **kw)
+        else:
+            super().__init__(master, bg=card_bg, highlightthickness=1, highlightbackground=border_col,
+                             highlightcolor=border_col, bd=0, **kw)
+        self.card_bg = card_bg
         self.header = None
+        safe_pad = max(pad, 10)
         if title:
-            self.header = tk.Frame(self, bg=T.SURFACE)
-            self.header.pack(fill="x", padx=dp(pad), pady=(dp(pad - 2), 0))
-            tk.Label(self.header, text=title, bg=T.SURFACE, fg=T.TEXT, font=font(11, "bold")).pack(side="left")
+            self.header = tk.Frame(self, bg=card_bg)
+            self.header.pack(fill="x", padx=dp(safe_pad), pady=(dp(max(10, safe_pad - 2)), 0))
+            tk.Label(self.header, text=title, bg=card_bg, fg=T.TEXT, font=font(11, "bold")).pack(side="left")
             if subtitle:
-                tk.Label(self.header, text=subtitle, bg=T.SURFACE, fg=T.DIM, font=font(9)).pack(side="left", padx=(dp(8), 0))
-        self.body = tk.Frame(self, bg=T.SURFACE)
-        self.body.pack(fill="both", expand=True, padx=dp(pad), pady=(dp(8) if title else dp(pad), dp(pad)))
+                tk.Label(self.header, text=subtitle, bg=card_bg, fg=T.DIM, font=font(9)).pack(side="left", padx=(dp(8), 0))
+        self.body = tk.Frame(self, bg=card_bg)
+        self.body.pack(fill="both", expand=True, padx=dp(safe_pad), pady=(dp(8) if title else dp(safe_pad), dp(safe_pad)))
 
 
-class StatTile(tk.Frame):
-    def __init__(self, master, label, hint=""):
-        super().__init__(master, bg=T.SURFACE, highlightthickness=1, highlightbackground=T.BORDER, bd=0)
-        tk.Label(self, text=label, bg=T.SURFACE, fg=T.DIM, font=font(9), anchor="w").pack(
-            fill="x", padx=dp(12), pady=(dp(10), 0))
+class StatTile(_FrameBase):
+    """Compact metric readout tile with obsidian border and semantic accent bar."""
+
+    def __init__(self, master, label, hint="", accent=None):
+        if HAS_CTK:
+            super().__init__(master, fg_color=T.SURFACE, corner_radius=dp(8), border_width=1, border_color=T.BORDER)
+        else:
+            super().__init__(master, bg=T.SURFACE, highlightthickness=1, highlightbackground=T.BORDER, bd=0)
+        self._last = None
+        head = tk.Frame(self, bg=T.SURFACE)
+        head.pack(fill="x", padx=dp(12), pady=(dp(9), 0))
+        self.dot = tk.Label(head, text="\u25cf", bg=T.SURFACE, fg=accent or T.ACCENT, font=font(8))
+        self.dot.pack(side="left", padx=(0, dp(5)))
+        tk.Label(head, text=label, bg=T.SURFACE, fg=T.DIM, font=font(9), anchor="w").pack(side="left", fill="x")
         self.value = tk.Label(self, text="-", bg=T.SURFACE, fg=T.TEXT, font=font(17, "bold", True), anchor="w")
         self.value.pack(fill="x", padx=dp(12))
         self.sub = tk.Label(self, text=hint, bg=T.SURFACE, fg=T.DIM, font=font(8), anchor="w")
-        self.sub.pack(fill="x", padx=dp(12), pady=(0, dp(10)))
+        self.sub.pack(fill="x", padx=dp(12), pady=(0, dp(9)))
 
     def set(self, text, color=None, sub=None):
-        self.value.configure(text=text, fg=color or T.TEXT)
+        c = color or T.TEXT
+        key = (text, c, sub)
+        if key == self._last:
+            return
+        self._last = key
+        self.value.configure(text=text, fg=c)
+        if color:
+            self.dot.configure(fg=color)
         if sub is not None:
             self.sub.configure(text=sub)
 
@@ -537,9 +989,16 @@ class Tooltip:
             y = self.widget.winfo_rooty() + self.widget.winfo_height() + dp(4)
             self._tip = tk.Toplevel(self.widget)
             self._tip.wm_overrideredirect(True)
+            tk.Label(self._tip, text=self.text, bg=T.SURFACE2, fg=T.TEXT, font=font(9), padx=dp(10), pady=dp(6),
+                     justify="left", wraplength=dp(320), highlightthickness=1, highlightbackground=T.BORDER_HI).pack()
+            self._tip.update_idletasks()
+            sw, sh = self._tip.winfo_screenwidth(), self._tip.winfo_screenheight()
+            tw = self._tip.winfo_reqwidth()
+            th = self._tip.winfo_reqheight()
+            x = max(dp(6), min(x, sw - tw - dp(8)))
+            if y + th > sh - dp(8):
+                y = max(dp(6), self.widget.winfo_rooty() - th - dp(4))
             self._tip.wm_geometry(f"+{x}+{y}")
-            tk.Label(self._tip, text=self.text, bg=T.SURFACE3, fg=T.TEXT, font=font(9), padx=dp(8), pady=dp(5),
-                     justify="left", wraplength=dp(320), highlightthickness=1, highlightbackground=T.BORDER).pack()
         except Exception:
             self._tip = None
 
@@ -559,27 +1018,133 @@ class Tooltip:
 
 
 # ==============================================================================
-# SCROLLING
+# SCROLLING (High-FPS Obsidian Canvas Viewport + Slim Thumb Scrollbar)
 # ==============================================================================
+class _DarkScrollbar(tk.Canvas):
+    """Slim obsidian pill scrollbar with smooth click-drag and hover feedback."""
+
+    def __init__(self, master, command, bg=None):
+        self._bg = bg or T.BG
+        super().__init__(master, width=dp(10), bg=self._bg, highlightthickness=0, bd=0, cursor="hand2")
+        self.command = command
+        self._first = 0.0
+        self._last = 1.0
+        self._hover = False
+        self._drag_y = None
+        self._drag_first = 0.0
+        self._paint_key = None
+        self.bind("<Configure>", lambda e: self._paint())
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<ButtonPress-1>", self._press)
+        self.bind("<B1-Motion>", self._drag)
+        self.bind("<ButtonRelease-1>", lambda e: setattr(self, "_drag_y", None))
+
+    def _set_hover(self, flag):
+        if flag == self._hover:
+            return
+        self._hover = flag
+        self._paint()
+
+    def set(self, first, last):
+        f, l = float(first), float(last)
+        if abs(f - self._first) < 1e-4 and abs(l - self._last) < 1e-4:
+            return
+        self._first, self._last = f, l
+        self._paint()
+
+    def _paint(self):
+        w, h = self.winfo_width(), self.winfo_height()
+        hidden = w < 2 or h < 10 or self._last - self._first >= 0.999
+        col = T.BORDER_HI if (self._hover or self._drag_y is not None) else T.SURFACE3
+        key = ("hidden", w, h, self._bg) if hidden else (w, h, round(self._first, 4), round(self._last, 4), col, self._bg)
+        if key == self._paint_key:
+            return
+        self._paint_key = key
+        self.delete("all")
+        if hidden:
+            return
+        pad_x = dp(2)
+        y0 = max(dp(3), self._first * h)
+        y1 = min(h - dp(3), max(y0 + dp(28), self._last * h))
+        r = max(2, (w - 2 * pad_x) / 2.0)
+        self.create_line(w / 2.0, y0 + r, w / 2.0, y1 - r, width=max(2, w - 2 * pad_x), capstyle="round", fill=col)
+
+    def _press(self, e):
+        h = max(1, self.winfo_height())
+        y0, y1 = self._first * h, self._last * h
+        if y0 <= e.y <= y1:
+            self._drag_y = e.y
+            self._drag_first = self._first
+        else:
+            span = self._last - self._first
+            target = max(0.0, min(1.0 - span, e.y / h - span / 2.0))
+            self.command("moveto", target)
+
+    def _drag(self, e):
+        if self._drag_y is None:
+            return
+        h = max(1, self.winfo_height())
+        delta = (e.y - self._drag_y) / h
+        span = self._last - self._first
+        target = max(0.0, min(1.0 - span, self._drag_first + delta))
+        self.command("moveto", target)
+
+
 class ScrollFrame(tk.Frame):
+    """Fast native-Canvas scrollable viewport with crisp dark scrollbar and instant wheel scrolling."""
+
     def __init__(self, master, bg=None):
         bg = bg or T.BG
         super().__init__(master, bg=bg)
-        self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0)
-        self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview, style="PM.Vertical.TScrollbar")
+        self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, yscrollincrement=dp(20))
+        self.vsb = _DarkScrollbar(self, self.canvas.yview, bg=bg)
         self.canvas.configure(yscrollcommand=self.vsb.set)
         self.vsb.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
         self.inner = tk.Frame(self.canvas, bg=bg)
         self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self._last_win_w = None
+        self._last_bbox = None
+        self._scroll_job = None
         self.inner.bind("<Configure>", self._inner_changed)
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._win, width=e.width))
+        self.canvas.bind("<Configure>", self._canvas_changed)
+
+    def _flush_scrollregion(self):
+        self._scroll_job = None
+        try:
+            if not self.winfo_exists():
+                return
+            bbox = self.canvas.bbox("all")
+            if bbox != self._last_bbox:
+                self._last_bbox = bbox
+                self.canvas.configure(scrollregion=bbox)
+        except Exception:
+            pass
 
     def _inner_changed(self, _e=None):
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        if self._last_bbox is None:
+            self._flush_scrollregion()
+        elif self._scroll_job is None:
+            self._scroll_job = self.after(16, self._flush_scrollregion)
+
+    def refresh_theme(self, bg=None):
+        c = bg or T.BG
+        self.configure(bg=c)
+        self.canvas.configure(bg=c)
+        self.inner.configure(bg=c)
+        self.vsb._bg = c
+        self.vsb._paint_key = None
+        self.vsb.configure(bg=c)
+        self.vsb._paint()
+
+    def _canvas_changed(self, e):
+        if e.width >= 20 and e.width != self._last_win_w and self.winfo_exists():
+            self._last_win_w = e.width
+            self.canvas.itemconfigure(self._win, width=e.width)
 
     def scroll_to(self, widget):
-        """Bring a widget inside the scrolled content into view (a little below the top edge)."""
+        """Bring a widget inside `.inner` into view."""
         try:
             self.inner.update_idletasks()
             y, w = 0, widget
@@ -592,128 +1157,234 @@ class ScrollFrame(tk.Frame):
             pass
 
     def scroll_units(self, units):
-        """Scroll only when the content is taller than the viewport."""
-        if self.inner.winfo_reqheight() > self.canvas.winfo_height():
-            self.canvas.yview_scroll(units, "units")
+        """Scroll smoothly when content overflows the viewport."""
+        try:
+            if self.inner.winfo_reqheight() > self.canvas.winfo_height():
+                self.canvas.yview_scroll(units, "units")
+        except Exception:
+            pass
 
 
 # ==============================================================================
-# ICONS
+# VECTOR ICONS & SIDEBAR NAV
 # ==============================================================================
 def draw_icon(c, name, color, size):
     k = size / 20.0
     w = max(1, int(round(1.6 * k)))
     c.delete("all")
     if name == "dashboard":
-        for x, y in ((2, 2), (11, 2), (2, 11), (11, 11)):
-            c.create_rectangle(x * k, y * k, (x + 7) * k, (y + 7) * k, outline=color, width=w)
+        # Modern asymmetric bento dashboard icon
+        c.create_rectangle(2.5 * k, 2.5 * k, 8.8 * k, 17.5 * k, outline=color, width=w)
+        c.create_rectangle(11.2 * k, 2.5 * k, 17.5 * k, 9.0 * k, outline=color, width=w)
+        c.create_rectangle(11.2 * k, 11.2 * k, 17.5 * k, 17.5 * k, outline=color, width=w)
+        c.create_oval(4.7 * k, 13.3 * k, 6.7 * k, 15.3 * k, fill=color, outline="")
     elif name == "sound":
-        for x, ky in ((5, 7), (10, 13), (15, 9)):
-            c.create_line(x * k, 3 * k, x * k, 17 * k, fill=color, width=w)
-            c.create_oval((x - 2.5) * k, (ky - 2.5) * k, (x + 2.5) * k, (ky + 2.5) * k, fill=color, outline=color)
+        # 3-fader precision studio mixer with ringed slider caps
+        for x, ky in ((4.5, 6.8), (10.0, 13.2), (15.5, 8.5)):
+            c.create_line(x * k, 2.8 * k, x * k, 17.2 * k, fill=color, width=w, capstyle="round")
+            c.create_rectangle((x - 2.2) * k, (ky - 1.5) * k, (x + 2.2) * k, (ky + 1.5) * k,
+                               fill=color, outline=color)
     elif name == "voice":
         for x, h in ((3, 4), (6.5, 10), (10, 16), (13.5, 9), (17, 5)):
             c.create_line(x * k, (10 - h / 2) * k, x * k, (10 + h / 2) * k, fill=color, width=w + 1, capstyle="round")
     elif name == "devices":
-        c.create_polygon(2 * k, 8 * k, 6 * k, 8 * k, 11 * k, 4 * k, 11 * k, 16 * k, 6 * k, 12 * k, 2 * k, 12 * k,
-                         outline=color, fill="", width=w)
-        c.create_arc(8 * k, 6 * k, 16 * k, 14 * k, start=-50, extent=100, style="arc", outline=color, width=w)
-        c.create_arc(8 * k, 3 * k, 19 * k, 17 * k, start=-50, extent=100, style="arc", outline=color, width=w)
+        # Clean wireless broadcast link icon
+        c.create_oval(8.0 * k, 12.6 * k, 12.0 * k, 16.6 * k, outline=color, width=w)
+        c.create_arc(4.8 * k, 7.6 * k, 15.2 * k, 18.0 * k, start=38, extent=104, style="arc", outline=color, width=w)
+        c.create_arc(1.8 * k, 3.6 * k, 18.2 * k, 20.0 * k, start=42, extent=96, style="arc", outline=color, width=w)
+        c.create_line(10 * k, 16.6 * k, 10 * k, 18.4 * k, fill=color, width=w, capstyle="round")
     elif name == "network":
         for r in (4, 8, 12):
             c.create_arc((10 - r) * k, (16 - r) * k, (10 + r) * k, (16 + r) * k, start=50, extent=80, style="arc",
                          outline=color, width=w)
         c.create_oval(8.8 * k, 14.8 * k, 11.2 * k, 17.2 * k, fill=color, outline=color)
     elif name == "settings":
-        c.create_oval(6 * k, 6 * k, 14 * k, 14 * k, outline=color, width=w)
-        for i in range(8):
-            a = i * math.pi / 4
-            c.create_line((10 + 6.5 * math.cos(a)) * k, (10 + 6.5 * math.sin(a)) * k,
-                          (10 + 9 * math.cos(a)) * k, (10 + 9 * math.sin(a)) * k, fill=color, width=w + 1)
+        # 6-tooth precision sprocket gear (reads cleanly at 20px)
+        c.create_oval(5.2 * k, 5.2 * k, 14.8 * k, 14.8 * k, outline=color, width=w)
+        c.create_oval(8.3 * k, 8.3 * k, 11.7 * k, 11.7 * k, fill=color, outline="")
+        for i in range(6):
+            a = i * math.pi / 3.0 - math.pi / 6.0
+            c.create_line((10 + 4.8 * math.cos(a)) * k, (10 + 4.8 * math.sin(a)) * k,
+                          (10 + 7.8 * math.cos(a)) * k, (10 + 7.8 * math.sin(a)) * k,
+                          fill=color, width=w + 1, capstyle="round")
     elif name == "log":
-        for y, x2 in ((5, 17), (10, 13), (15, 16)):
-            c.create_line(3 * k, y * k, x2 * k, y * k, fill=color, width=w, capstyle="round")
+        # Framed heartbeat diagnostics pulse
+        c.create_rectangle(2.5 * k, 3.5 * k, 17.5 * k, 16.5 * k, outline=color, width=w)
+        c.create_line(4.0 * k, 10.5 * k, 7.2 * k, 10.5 * k, 8.8 * k, 6.2 * k, 11.2 * k, 14.2 * k,
+                      12.8 * k, 10.5 * k, 16.0 * k, 10.5 * k, fill=color, width=w, capstyle="round", joinstyle="round")
+    elif name == "sidebar_collapse":
+        c.create_line(4.5 * k, 3.5 * k, 4.5 * k, 16.5 * k, fill=color, width=w, capstyle="round")
+        c.create_line(14.5 * k, 5.5 * k, 9.2 * k, 10.0 * k, 14.5 * k, 14.5 * k,
+                      fill=color, width=w, capstyle="round", joinstyle="round")
+    elif name == "sidebar_expand":
+        c.create_line(4.5 * k, 3.5 * k, 4.5 * k, 16.5 * k, fill=color, width=w, capstyle="round")
+        c.create_line(9.5 * k, 5.5 * k, 14.8 * k, 10.0 * k, 9.5 * k, 14.5 * k,
+                      fill=color, width=w, capstyle="round", joinstyle="round")
     elif name == "mic":
         c.create_rectangle(7 * k, 2 * k, 13 * k, 12 * k, outline=color, width=w)
         c.create_arc(4 * k, 6 * k, 16 * k, 16 * k, start=200, extent=140, style="arc", outline=color, width=w)
         c.create_line(10 * k, 15 * k, 10 * k, 18 * k, fill=color, width=w)
 
 
-class NavButton(tk.Frame):
+class NavButton(_FrameBase):
+    """Sidebar navigation pill supporting both expanded labels and slim 64px icon-only rail."""
+
     def __init__(self, master, icon, text, command):
-        super().__init__(master, bg=T.SIDEBAR, cursor="hand2")
-        self.command, self.icon, self.active = command, icon, False
+        if HAS_CTK:
+            super().__init__(master, fg_color=T.SIDEBAR, corner_radius=dp(8), border_width=1, border_color=T.SIDEBAR, cursor="hand2")
+        else:
+            super().__init__(master, bg=T.SIDEBAR, cursor="hand2")
+        self.command, self.icon, self.nav_text = command, icon, text
+        self.active = False
+        self.compact = False
+        self._hover = False
+        self._last_bg = None
+        self._paint_key = None
         self.bar = tk.Frame(self, width=dp(3), bg=T.SIDEBAR)
-        self.bar.pack(side="left", fill="y")
-        self.canvas = tk.Canvas(self, width=dp(22), height=dp(22), bg=T.SIDEBAR, highlightthickness=0, bd=0)
-        self.canvas.pack(side="left", padx=(dp(14), dp(10)), pady=dp(10))
+        self.bar.pack(side="left", fill="y", padx=(dp(6), 0), pady=dp(8))
+        self.canvas = tk.Canvas(self, width=dp(20), height=dp(20), bg=T.SIDEBAR, highlightthickness=0, bd=0)
+        self.canvas.pack(side="left", padx=(dp(10), dp(10)), pady=dp(10))
         self.label = tk.Label(self, text=text, bg=T.SIDEBAR, fg=T.MUTED, font=font(10), anchor="w")
-        self.label.pack(side="left", fill="x", expand=True)
-        for w in (self, self.canvas, self.label):
+        self.label.pack(side="left", fill="x", expand=True, padx=(0, dp(8)))
+        draw_icon(self.canvas, self.icon, T.MUTED, dp(20))
+        for w in (self, self.bar, self.canvas, self.label):
             w.bind("<Button-1>", lambda e: self.command())
             w.bind("<Enter>", lambda e: self._paint(hover=True))
             w.bind("<Leave>", lambda e: self._paint(hover=False))
+
+    def refresh_theme(self):
+        self._last_bg = None
+        self._paint_key = None
         self._paint()
 
-    def _paint(self, hover=False):
-        bg = T.SURFACE2 if (self.active or hover) else T.SIDEBAR
-        fg = T.TEXT if self.active else (T.TEXT if hover else T.MUTED)
+    def _paint(self, hover=None):
+        if hover is not None:
+            self._hover = hover
+        is_hover = self._hover
+        if self.active:
+            bg = lerp_color(T.SIDEBAR, T.ACCENT, 0.14)
+            border = lerp_color(T.SIDEBAR, T.ACCENT, 0.30)
+        elif is_hover:
+            bg = T.SURFACE2
+            border = T.BORDER
+        else:
+            bg = T.SIDEBAR
+            border = T.SIDEBAR
+        fg = T.TEXT if (self.active or is_hover) else T.MUTED
         icon_color = T.ACCENT if self.active else fg
-        for w in (self, self.canvas, self.label):
-            w.configure(bg=bg)
+        pkey = (self.active, is_hover, self.compact, bg, border, fg, icon_color)
+        if pkey == self._paint_key:
+            return
+        self._paint_key = pkey
+        if bg != self._last_bg:
+            self._last_bg = bg
+            if HAS_CTK:
+                self.configure(fg_color=bg, border_color=border)
+            else:
+                self.configure(bg=bg)
+            for w in (self.canvas, self.label):
+                w.configure(bg=bg)
+        elif HAS_CTK:
+            self.configure(border_color=border)
         self.label.configure(fg=fg, font=font(10, "bold" if self.active else "normal"))
         self.bar.configure(bg=T.ACCENT if self.active else bg)
-        draw_icon(self.canvas, self.icon, icon_color, dp(22))
+        draw_icon(self.canvas, self.icon, icon_color, dp(20))
 
     def set_active(self, active):
         self.active = bool(active)
         self._paint()
 
+    def set_compact(self, compact):
+        compact = bool(compact)
+        if compact == self.compact:
+            return
+        self.compact = compact
+        self._paint_key = None
+        if compact:
+            self.label.pack_forget()
+            self.bar.pack_forget()
+            self.canvas.pack_forget()
+            self.bar.pack(side="left", fill="y", padx=(dp(4), 0), pady=dp(8))
+            self.canvas.pack(side="left", expand=True, padx=(0, dp(4)), pady=dp(10))
+        else:
+            self.bar.pack_forget()
+            self.canvas.pack_forget()
+            self.bar.pack(side="left", fill="y", padx=(dp(6), 0), pady=dp(8))
+            self.canvas.pack(side="left", padx=(dp(10), dp(10)), pady=dp(10))
+            self.label.pack(side="left", fill="x", expand=True, padx=(0, dp(8)))
+        self._paint()
+
 
 # ==============================================================================
-# VISUALISERS
+# REALTIME AUDIO VISUALISERS
 # ==============================================================================
 class LevelMeter(tk.Canvas):
-    """Segmented dBFS meter with RMS marker, peak-hold and clip LED."""
+    """Segmented dBFS meter with RMS marker, peak-hold, clip LED, and idle fast-path."""
     SEGMENTS = 54
     DB_MIN = -60.0
 
-    def __init__(self, master, height=34, bg=None):
+    def __init__(self, master, height=38, bg=None):
         super().__init__(master, width=dp(200), height=dp(height), bg=bg or T.SURFACE, highlightthickness=0, bd=0)
         self._items = []
         self._lit = [-1] * self.SEGMENTS
+        self._seg_colors = []
         self._rms = None
         self._hold = None
         self._led = None
         self._labels_built = False
+        self._idle_settled = False
+        self._last_xr = None
+        self._last_xh = None
+        self._last_clipped = None
+        self._last_lit = -1
+        self._build_key = None
         self.bind("<Configure>", lambda e: self._build())
 
     def _x(self, db):
         return self._pad + (min(0.0, max(self.DB_MIN, db)) - self.DB_MIN) / -self.DB_MIN * self._span
 
     def _build(self):
-        self.delete("all")
         w, h = self.winfo_width(), self.winfo_height()
+        if w < 20 or h < 8:
+            return
+        bkey = (w, h, T.SURFACE, T.SURFACE2, T.SURFACE3, T.GOOD, T.WARN, T.BAD, T.TEXT, T.DIM)
+        if bkey == self._build_key:
+            return
+        self._build_key = bkey
+        self.delete("all")
         self._pad = dp(2)
-        self._led_w = dp(16)
+        self._led_w = dp(18)
         self._span = max(10, w - 2 * self._pad - self._led_w)
-        bar_h = dp(16)
+        show_labels = h >= dp(30)
+        label_reserve = dp(16) if show_labels else dp(4)
+        bar_h = min(dp(18), max(dp(10), h - dp(3) - label_reserve)) if show_labels else max(dp(8), h - dp(4))
         self._bar_y0 = dp(2)
         self._bar_y1 = self._bar_y0 + bar_h
         seg_w = self._span / self.SEGMENTS
         self._items = []
+        self._seg_colors = [self._calc_color(i) for i in range(self.SEGMENTS)]
         for i in range(self.SEGMENTS):
             x0 = self._pad + i * seg_w
             self._items.append(self.create_rectangle(x0 + 1, self._bar_y0, x0 + seg_w - 1, self._bar_y1, fill=T.SURFACE2, outline=""))
-        self._rms = self.create_rectangle(0, self._bar_y0 - 2, 0, self._bar_y1 + 2, fill="#ffffff", outline="")
+        self._rms = self.create_rectangle(0, self._bar_y0 - 2, 0, self._bar_y1 + 2, fill=T.TEXT, outline="")
         self._hold = self.create_rectangle(0, self._bar_y0 - 2, 0, self._bar_y1 + 2, fill=T.TEXT, outline="")
-        self._led = self.create_oval(w - self._led_w + dp(3), self._bar_y0, w - dp(1), self._bar_y1, fill=T.SURFACE3, outline="")
-        for db in (-60, -48, -36, -24, -12, -6, 0):
-            x = self._x(db)
-            self.create_text(x, self._bar_y1 + dp(9), text=str(db), fill=T.DIM, font=font(7), anchor="n" if db > -60 else "nw")
+        led_d = min(dp(14), bar_h)
+        led_y0 = self._bar_y0 + (bar_h - led_d) / 2.0
+        self._led = self.create_oval(w - led_d - dp(1), led_y0, w - dp(1), led_y0 + led_d, fill=T.SURFACE3, outline="")
+        if show_labels:
+            label_y = self._bar_y1 + dp(3)
+            for db in (-60, -48, -36, -24, -12, -6, 0):
+                x = self._x(db)
+                anch = "nw" if db == -60 else ("ne" if db == 0 else "n")
+                self.create_text(x, label_y, text=str(db), fill=T.DIM, font=font(8), anchor=anch)
         self._lit = [-1] * self.SEGMENTS
+        self._last_lit = -1
+        self._idle_settled = False
+        self._last_xr = None
+        self._last_xh = None
+        self._last_clipped = None
 
-    def _color(self, i):
+    def _calc_color(self, i):
         db = self.DB_MIN + (i + 0.5) / self.SEGMENTS * -self.DB_MIN
         if db > -3:
             return T.BAD
@@ -721,67 +1392,161 @@ class LevelMeter(tk.Canvas):
             return T.WARN
         return T.GOOD
 
+    def _color(self, i):
+        return self._seg_colors[i] if i < len(self._seg_colors) else self._calc_color(i)
+
     def update_levels(self, peak_db, rms_db, hold_db, clipped):
         if not self._items:
             return
+        clipped_b = bool(clipped)
+        is_quiet = (
+            peak_db <= self.DB_MIN + 0.5
+            and rms_db <= self.DB_MIN + 0.5
+            and hold_db <= self.DB_MIN + 0.5
+            and not clipped_b
+        )
+        if is_quiet and self._idle_settled:
+            return
         lit = int((min(0.0, max(self.DB_MIN, peak_db)) - self.DB_MIN) / -self.DB_MIN * self.SEGMENTS)
-        for i, item in enumerate(self._items):
+        if self._last_lit < 0:
+            idx_range = range(self.SEGMENTS)
+        elif lit != self._last_lit:
+            idx_range = range(min(self._last_lit, lit), max(self._last_lit, lit))
+        else:
+            idx_range = ()
+        for i in idx_range:
             state = 1 if i < lit else 0
             if state != self._lit[i]:
                 self._lit[i] = state
-                self.itemconfigure(item, fill=self._color(i) if state else T.SURFACE2)
-        xr = self._x(rms_db)
-        self.coords(self._rms, xr - 1, self._bar_y0 - 2, xr + 1, self._bar_y1 + 2)
-        xh = self._x(hold_db)
-        self.coords(self._hold, xh - 1, self._bar_y0, xh + 1, self._bar_y1)
-        self.itemconfigure(self._led, fill=T.BAD if clipped else T.SURFACE3)
+                self.itemconfigure(self._items[i], fill=self._color(i) if state else T.SURFACE2)
+        self._last_lit = lit
+        xr = round(self._x(rms_db), 1)
+        if xr != self._last_xr:
+            self._last_xr = xr
+            self.coords(self._rms, xr - 1, self._bar_y0 - 2, xr + 1, self._bar_y1 + 2)
+        xh = round(self._x(hold_db), 1)
+        if xh != self._last_xh:
+            self._last_xh = xh
+            self.coords(self._hold, xh - 1, self._bar_y0, xh + 1, self._bar_y1)
+        if clipped_b != self._last_clipped:
+            self._last_clipped = clipped_b
+            self.itemconfigure(self._led, fill=T.BAD if clipped_b else T.SURFACE3)
+        self._idle_settled = is_quiet and lit <= 0
 
 
 class SpectrumView(tk.Canvas):
-    """40-band spectrum with falling bars + peak caps, or an oscilloscope trace."""
+    """Frequency visualizer: 40-band matte Spectrum, 24-column Pill Bars, or dual-layer Waveform."""
+    PILL_BANDS = 24
 
-    def __init__(self, master, height=140, bands=40):
-        super().__init__(master, width=dp(200), height=dp(height), bg=T.SURFACE, highlightthickness=0, bd=0)
+    def __init__(self, master, height=130, bands=40):
+        super().__init__(master, width=dp(200), height=dp(height), bg=T.SIDEBAR, highlightthickness=1,
+                         highlightbackground=T.BORDER, bd=0)
         self.n = bands
         self.mode = "spectrum"
         self.vals = [0.0] * bands
         self.caps = [0.0] * bands
         self.cap_t = [0] * bands
-        self._bars, self._cap_items, self._scope = [], [], None
+        self._pill_vals = [0.0] * self.PILL_BANDS
+        self._pill_caps = [0.0] * self.PILL_BANDS
+        self._pill_cap_t = [0] * self.PILL_BANDS
+        self._bars, self._cap_items, self._pills, self._scope, self._scope_halo = [], [], [], None, None
+        self._pill_states = []
+        self._pill_cap_states = []
+        self._spec_colors = []
+        self._pill_colors = []
+        self._bar_coords = []
+        self._cap_coords = []
+        self._pill_y_cache = []
+        self._pill_cap_cache = []
+        self._scope_zeroed = False
+        self._build_key = None
+        self._idle_settled = False
         self.bind("<Configure>", lambda e: self._build())
 
     def set_mode(self, mode):
         self.mode = mode
+        self._idle_settled = False
+        self._build_key = None
         self._build()
 
+    @staticmethod
+    def _matte_grad(t):
+        # Restrained matte gradient ramp between T.ACCENT and T.BLUE over dark canvas
+        c0 = lerp_color(T.SIDEBAR, T.ACCENT, 0.84)
+        c1 = lerp_color(T.SIDEBAR, T.BLUE, 0.84)
+        return lerp_color(c0, c1, t)
+
     def _build(self):
-        self.delete("all")
         w, h = self.winfo_width(), self.winfo_height()
+        bkey = (w, h, self.mode, T.SIDEBAR, T.SURFACE2, T.BORDER, T.ACCENT, T.ACCENT_HI, T.BLUE, T.MUTED, T.DIM)
+        if bkey == self._build_key:
+            return
+        self._build_key = bkey
+        self.delete("all")
         self._cw, self._ch = w, h
-        self._bars, self._cap_items, self._scope = [], [], None
+        self._bars, self._cap_items, self._pills = [], [], []
+        self._pill_states, self._pill_cap_states = [], []
+        self._bar_coords = [None] * self.n
+        self._cap_coords = [None] * self.n
+        self._pill_y_cache = [None] * self.PILL_BANDS
+        self._pill_cap_cache = [None] * self.PILL_BANDS
+        self._scope_zeroed = False
+        self._scope, self._scope_halo = None, None
+        self._idle_settled = False
+        self._spec_colors = [self._matte_grad(i / max(1, self.n - 1)) for i in range(self.n)]
+        self._pill_colors = [self._matte_grad(i / max(1, self.PILL_BANDS - 1)) for i in range(self.PILL_BANDS)]
         for frac in (0.25, 0.5, 0.75):
             self.create_line(0, h * frac, w, h * frac, fill=T.SURFACE2)
         if self.mode == "spectrum":
             gap = dp(2)
-            bw = (w - gap * (self.n + 1)) / self.n
+            pad_x = dp(4)
+            bw = max(2.0, (w - 2 * pad_x - gap * (self.n - 1)) / self.n)
             for i in range(self.n):
-                x0 = gap + i * (bw + gap)
-                col = lerp_color(T.ACCENT, T.VIOLET, i / max(1, self.n - 1))
+                x0 = pad_x + i * (bw + gap)
+                col = self._spec_colors[i]
                 self._bars.append(self.create_rectangle(x0, h, x0 + bw, h, fill=col, outline=""))
-                self._cap_items.append(self.create_rectangle(x0, h, x0 + bw, h, fill=T.TEXT, outline=""))
+                self._cap_items.append(self.create_rectangle(x0, h, x0 + bw, h, fill=T.MUTED, outline=""))
+            for f, lab in ((100, "100"), (1000, "1k"), (10000, "10k")):
+                pos = (math.log10(f) - math.log10(60)) / (math.log10(18000) - math.log10(60))
+                self.create_text(pos * w, h - dp(3), text=lab, fill=T.DIM, font=font(7), anchor="s")
+        elif self.mode == "pills":
+            pn = self.PILL_BANDS
+            pad_x = dp(8)
+            y_top, y_bot = dp(8), max(dp(20), h - dp(15))
+            gap = dp(4)
+            bw = max(4.0, (w - 2 * pad_x - gap * (pn - 1)) / pn)
+            r = min(bw * 0.36, dp(4.5))
+            for i in range(pn):
+                x0 = pad_x + i * (bw + gap)
+                x1 = x0 + bw
+                # Recessed matte track pill slot
+                self.create_oval(x0, y_top, x1, y_top + 2 * r, fill=T.SURFACE2, outline="")
+                self.create_rectangle(x0, y_top + r, x1, y_bot - r, fill=T.SURFACE2, outline="")
+                self.create_oval(x0, y_bot - 2 * r, x1, y_bot, fill=T.SURFACE2, outline="")
+                col = self._pill_colors[i]
+                b_top = self.create_oval(x0, y_bot, x1, y_bot, fill=col, outline="", state="hidden")
+                b_mid = self.create_rectangle(x0, y_bot, x1, y_bot, fill=col, outline="", state="hidden")
+                b_bot = self.create_oval(x0, y_bot, x1, y_bot, fill=col, outline="", state="hidden")
+                p_cap = self.create_rectangle(x0 + 1, y_bot, x1 - 1, y_bot, fill=T.MUTED, outline="", state="hidden")
+                self._pills.append((x0, x1, y_top, y_bot, r, b_top, b_mid, b_bot, p_cap))
+                self._pill_states.append(False)
+                self._pill_cap_states.append(False)
             for f, lab in ((100, "100"), (1000, "1k"), (10000, "10k")):
                 pos = (math.log10(f) - math.log10(60)) / (math.log10(18000) - math.log10(60))
                 self.create_text(pos * w, h - dp(2), text=lab, fill=T.DIM, font=font(7), anchor="s")
         else:
             self.create_line(0, h / 2, w, h / 2, fill=T.BORDER)
-            self._scope = self.create_line(0, h / 2, w, h / 2, fill=T.ACCENT, width=dp(2), smooth=True)
+            self._scope_halo = self.create_line(0, h / 2, w, h / 2, fill=lerp_color(T.SIDEBAR, T.ACCENT, 0.24),
+                                                width=dp(4), smooth=True)
+            self._scope = self.create_line(0, h / 2, w, h / 2, fill=T.ACCENT_HI, width=dp(2), smooth=True)
 
     def feed(self, bands, scope):
+        self._idle_settled = False
         if self.mode == "spectrum":
             if not self._bars:
                 return
-            h, gap = self._ch, dp(2)
-            bw = (self._cw - gap * (self.n + 1)) / self.n
+            h, gap, pad_x = self._ch, dp(2), dp(4)
+            bw = max(2.0, (self._cw - 2 * pad_x - gap * (self.n - 1)) / self.n)
             for i in range(self.n):
                 v = float(bands[i]) if i < len(bands) else 0.0
                 self.vals[i] = v if v > self.vals[i] else max(v, self.vals[i] - 0.045)
@@ -791,21 +1556,83 @@ class SpectrumView(tk.Canvas):
                     self.cap_t[i] -= 1
                 else:
                     self.caps[i] = max(self.vals[i], self.caps[i] - 0.03)
-                x0 = gap + i * (bw + gap)
-                top = h - self.vals[i] * (h - dp(14))
-                self.coords(self._bars[i], x0, top, x0 + bw, h)
-                ct = h - self.caps[i] * (h - dp(14))
-                self.coords(self._cap_items[i], x0, ct - dp(2), x0 + bw, ct)
+                x0 = pad_x + i * (bw + gap)
+                top = round(h - self.vals[i] * (h - dp(16)), 1)
+                if top != self._bar_coords[i]:
+                    self._bar_coords[i] = top
+                    self.coords(self._bars[i], x0, top, x0 + bw, h)
+                ct = round(h - self.caps[i] * (h - dp(16)), 1)
+                if ct != self._cap_coords[i]:
+                    self._cap_coords[i] = ct
+                    self.coords(self._cap_items[i], x0, ct - dp(2), x0 + bw, ct)
+        elif self.mode == "pills":
+            if not self._pills:
+                return
+            pn = self.PILL_BANDS
+            blen = max(1, len(bands))
+            for i, (x0, x1, y_top, y_bot, r, b_top, b_mid, b_bot, p_cap) in enumerate(self._pills):
+                lo = int(i * blen / pn)
+                hi = max(lo + 1, int((i + 1) * blen / pn))
+                v = max((float(bands[j]) for j in range(lo, min(blen, hi))), default=0.0)
+                self._pill_vals[i] = v if v > self._pill_vals[i] else max(v, self._pill_vals[i] - 0.045)
+                if self._pill_vals[i] >= self._pill_caps[i]:
+                    self._pill_caps[i], self._pill_cap_t[i] = self._pill_vals[i], 16
+                elif self._pill_cap_t[i] > 0:
+                    self._pill_cap_t[i] -= 1
+                else:
+                    self._pill_caps[i] = max(self._pill_vals[i], self._pill_caps[i] - 0.03)
+                usable = max(6.0, y_bot - y_top)
+                active_h = self._pill_vals[i] * usable
+                show_pill = active_h >= dp(3)
+                if show_pill:
+                    top_y = round(max(y_top, y_bot - active_h), 1)
+                    if top_y != self._pill_y_cache[i]:
+                        self._pill_y_cache[i] = top_y
+                        ch = min(r, (y_bot - top_y) * 0.5)
+                        self.coords(b_top, x0, top_y, x1, top_y + 2 * ch)
+                        self.coords(b_bot, x0, y_bot - 2 * ch, x1, y_bot)
+                        self.coords(b_mid, x0, top_y + ch, x1, y_bot - ch)
+                if show_pill != self._pill_states[i]:
+                    self._pill_states[i] = show_pill
+                    st = "normal" if show_pill else "hidden"
+                    for item in (b_top, b_mid, b_bot):
+                        self.itemconfigure(item, state=st)
+                cap_h = self._pill_caps[i] * usable
+                show_cap = cap_h >= dp(4)
+                if show_cap:
+                    ct = round(max(y_top, y_bot - cap_h), 1)
+                    if ct != self._pill_cap_cache[i]:
+                        self._pill_cap_cache[i] = ct
+                        self.coords(p_cap, x0 + dp(1), ct - dp(2.5), x1 - dp(1), ct)
+                if show_cap != self._pill_cap_states[i]:
+                    self._pill_cap_states[i] = show_cap
+                    self.itemconfigure(p_cap, state="normal" if show_cap else "hidden")
         elif self._scope is not None and len(scope) > 1:
+            is_zero = not any(abs(float(s)) > 1e-4 for s in scope)
+            if is_zero and self._scope_zeroed:
+                return
+            self._scope_zeroed = is_zero
             pts = []
             step = self._cw / (len(scope) - 1)
-            amp = self._ch * 0.45
+            amp = self._ch * 0.44
             for i, s in enumerate(scope):
                 pts.extend((i * step, self._ch / 2 - max(-1.0, min(1.0, float(s) * 2.5)) * amp))
+            if self._scope_halo is not None:
+                self.coords(self._scope_halo, *pts)
             self.coords(self._scope, *pts)
 
     def idle(self):
+        if self._idle_settled:
+            return
         self.feed([0.0] * self.n, [0.0] * 128)
+        if self.mode == "spectrum":
+            settled = max(self.vals, default=0.0) < 0.002 and max(self.caps, default=0.0) < 0.002
+        elif self.mode == "pills":
+            settled = max(self._pill_vals, default=0.0) < 0.002 and max(self._pill_caps, default=0.0) < 0.002
+        else:
+            settled = True
+        if settled:
+            self._idle_settled = True
 
 
 class EQCurve(tk.Canvas):
@@ -813,7 +1640,8 @@ class EQCurve(tk.Canvas):
     FMIN, FMAX, DBR = 20.0, 20000.0, 15.0
 
     def __init__(self, master, height=120):
-        super().__init__(master, width=dp(200), height=dp(height), bg=T.SURFACE2, highlightthickness=0, bd=0)
+        super().__init__(master, width=dp(200), height=dp(height), bg=T.SIDEBAR, highlightthickness=1,
+                         highlightbackground=T.BORDER, bd=0)
         self.curve = None
         self.nodes = []
         self.bind("<Configure>", lambda e: self.redraw())
@@ -837,16 +1665,16 @@ class EQCurve(tk.Canvas):
         if w < 20:
             return
         for db in (-10, -5, 0, 5, 10):
-            self.create_line(0, self._y(db), w, self._y(db), fill=T.BORDER if db == 0 else T.SURFACE3)
+            self.create_line(0, self._y(db), w, self._y(db), fill=T.BORDER if db == 0 else T.SURFACE2)
         for f, lab in ((100, "100"), (1000, "1k"), (10000, "10k")):
-            self.create_line(self._x(f), 0, self._x(f), h, fill=T.SURFACE3)
+            self.create_line(self._x(f), 0, self._x(f), h, fill=T.SURFACE2)
             self.create_text(self._x(f) + dp(3), h - dp(2), text=lab, fill=T.DIM, font=font(7), anchor="sw")
         if self.curve:
             pts = []
             for f, d in zip(*self.curve):
                 pts.extend((self._x(f), self._y(d)))
             if len(pts) >= 4:
-                self.create_line(*pts, fill=T.ACCENT, width=dp(2), smooth=True)
+                self.create_line(*pts, fill=T.BLUE, width=dp(2), smooth=True)
         for f, g in self.nodes:
             x, y, r = self._x(f), self._y(g), dp(4)
             self.create_oval(x - r, y - r, x + r, y + r, fill=T.TEXT, outline=T.ACCENT)

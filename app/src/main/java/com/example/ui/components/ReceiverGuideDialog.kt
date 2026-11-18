@@ -57,6 +57,7 @@ import com.example.ui.theme.StudioCard
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.BuildConfig
 import com.example.util.ShareHelper
 
 @Composable
@@ -68,7 +69,7 @@ fun ReceiverGuideDialog(
 
     val quickScriptPreview = remember {
         """
-# PhoneMic Standalone CLI Receiver v1.2.0
+# PhoneMic Standalone CLI Receiver v${BuildConfig.VERSION_NAME}
 # Zero GUI dependencies • Multi-Phone Mixing • Real-Time Monitoring
 # Run on PC / Mac / Linux:
 python phonemic_cli.py
@@ -112,7 +113,7 @@ python phonemic_cli.py
                             )
                         }
                         Text(
-                            text = "Windows GUI & Standalone CLI v1.2.0 Guide",
+                            text = "Windows GUI & Standalone CLI v${BuildConfig.VERSION_NAME} Guide",
                             color = TextMuted,
                             fontSize = 11.sp
                         )

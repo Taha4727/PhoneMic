@@ -40,9 +40,9 @@ class SettingsBinder:
         self.cfg = receiver.config
         self.proc = receiver.processor
         self.hooks = hooks or NullHooks()
-        self.listeners = {}        # key -> [callable(ui_value)]
-        self.any_listeners = []    # callable(setting), after every change
-        self.dependents = {}       # toggle key -> [callable(enabled)]
+        self.listeners = {}        # key -> [(scope, callable(ui_value))]
+        self.any_listeners = []    # [(scope, callable(setting))], after every change
+        self.dependents = {}       # toggle key -> [(scope, callable(enabled))]
 
     # ---- reading ---------------------------------------------------------------------------------------------------
     def get(self, s):
@@ -84,7 +84,7 @@ class SettingsBinder:
             self.persist_voice()
         elif s.target == "sys":
             if s.key == "sys.start_with_windows" and not system.set_startup_enabled(bool(ui_value)):
-                self.hooks.notify("Could not change the Windows startup entry.", "error")
+                self.hooks.notify("Could not change the desktop startup entry.", "error")
                 return False
         else:
             sec, name = s.key.split(".")
@@ -102,10 +102,10 @@ class SettingsBinder:
             self._after_cfg(s, value)
         changed = not _close(before, self.get(s)) if before is not None else True
         self.announce(s, source)
-        for fn in self.any_listeners:
+        for _scope, fn in list(self.any_listeners):
             fn(s)
         if s.kind == "toggle":
-            for fn in self.dependents.get(s.key, []):
+            for _scope, fn in list(self.dependents.get(s.key, ())):
                 fn(bool(self.get(s)))
         return changed
 
@@ -130,6 +130,11 @@ class SettingsBinder:
             self.hooks.apply_hotkeys()
         elif k == "app.tray_icon":
             self.hooks.apply_tray()
+        elif k == "audio.linux_auto_virtual_mic":
+            if bool(value) and system.IS_LINUX and hasattr(self.hooks, "ensure_virtual_mic"):
+                self.hooks.ensure_virtual_mic(quiet_if_active=True)
+        elif k in ("app.accent", "app.soft_colors") and hasattr(self.hooks, "apply_theme"):
+            self.hooks.apply_theme()
         elif s.restart:
             self.hooks.notify("This takes effect the next time the app starts.", "info")
 
@@ -150,18 +155,33 @@ class SettingsBinder:
         self.cfg.save_soon()
 
     # ---- listeners (widgets) ------------------------------------------------------------------------------------------
-    def listen(self, key, fn):
-        self.listeners.setdefault(key, []).append(fn)
+    def listen(self, key, fn, scope="page"):
+        self.listeners.setdefault(key, []).append((scope, fn))
 
-    def listen_any(self, fn):
-        self.any_listeners.append(fn)
+    def listen_any(self, fn, scope="page"):
+        self.any_listeners.append((scope, fn))
 
-    def depend(self, toggle_key, fn):
-        self.dependents.setdefault(toggle_key, []).append(fn)
+    def depend(self, toggle_key, fn, scope="page"):
+        self.dependents.setdefault(toggle_key, []).append((scope, fn))
+
+    def clear_scope(self, scope="page"):
+        for key in list(self.listeners):
+            kept = [(sc, fn) for sc, fn in self.listeners[key] if sc != scope]
+            if kept:
+                self.listeners[key] = kept
+            else:
+                del self.listeners[key]
+        self.any_listeners = [(sc, fn) for sc, fn in self.any_listeners if sc != scope]
+        for key in list(self.dependents):
+            kept = [(sc, fn) for sc, fn in self.dependents[key] if sc != scope]
+            if kept:
+                self.dependents[key] = kept
+            else:
+                del self.dependents[key]
 
     def announce(self, s, source=None):
         value = self.get(s)
-        for fn in self.listeners.get(s.key, []):
+        for _scope, fn in list(self.listeners.get(s.key, ())):
             if fn is not source:
                 fn(value)
 
@@ -169,9 +189,9 @@ class SettingsBinder:
         """Tell every widget to re-read its value (after a preset is applied, settings imported, ...)."""
         for key in list(self.listeners):
             self.announce(sm.BY_KEY[key])
-        for toggle, fns in self.dependents.items():
+        for toggle, entries in list(self.dependents.items()):
             on = bool(self.get(sm.BY_KEY[toggle]))
-            for fn in fns:
+            for _scope, fn in entries:
                 fn(on)
-        for fn in self.any_listeners:
+        for _scope, fn in list(self.any_listeners):
             fn(None)

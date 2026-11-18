@@ -27,7 +27,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.BuildConfig
 import com.example.DeviceProfile
+import com.example.PhoneMicService
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.StreamActiveGreen
 import com.example.ui.theme.StreamWarningAmber
@@ -51,6 +53,7 @@ fun StreamTelemetryCard(
     port: String = "",
     connectionMode: String = "",
     elapsedSeconds: Long = 0L,
+    audioQuality: PhoneMicService.Companion.AudioQuality = PhoneMicService.Companion.AudioQuality.STUDIO_48K,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -192,9 +195,10 @@ fun StreamTelemetryCard(
                 )
 
                 // Metric: Audio Bitrate
+                val nominalBitrate = String.format(Locale.US, "%.1f", (audioQuality.sampleRate * 16) / 1000f)
                 TelemetryMetricTile(
                     title = "BITRATE",
-                    value = if (isRunning && !isPaused) "768.0" else "0.0",
+                    value = if (isRunning && !isPaused) nominalBitrate else "0.0",
                     unit = "kbps",
                     modifier = Modifier.weight(1f)
                 )
@@ -237,10 +241,10 @@ fun StreamTelemetryCard(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                SpecRow(label = "Sampling Rate", value = "48,000 Hz")
+                SpecRow(label = "Sampling Rate", value = String.format(Locale.US, "%,d Hz", audioQuality.sampleRate))
                 SpecRow(label = "Audio Format", value = "16-bit Linear PCM")
                 SpecRow(label = "Channels", value = "1 (Mono)")
-                SpecRow(label = "Packet Buffer", value = "10 ms (960 bytes)")
+                SpecRow(label = "Packet Buffer", value = "10 ms (${audioQuality.packetSize} bytes)")
                 SpecRow(label = "Transport Protocol", value = transportMode.uppercase(Locale.US))
             }
         }
@@ -287,7 +291,7 @@ fun StreamTelemetryCard(
                 if (connectionMode.isNotEmpty()) {
                     SpecRow(label = "Connection Mode", value = connectionMode)
                 }
-                SpecRow(label = "Receiver Script", value = "v0.6.4 (Python / EXE)")
+                SpecRow(label = "Receiver Script", value = "v${BuildConfig.VERSION_NAME} (Python / EXE)")
                 SpecRow(label = "Audio Output", value = "VB-CABLE / WASAPI")
             }
         }

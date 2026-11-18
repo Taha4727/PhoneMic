@@ -5,7 +5,7 @@ import time
 import socket
 from collections import namedtuple
 
-from . import system, hotkeys, tray, cues
+from . import system, hotkeys, tray, cues, virtual_mic
 from .const import VERSION, INSTANCE_PORT
 
 Result = namedtuple("Result", "name status detail")      # status: pass | fail | skip
@@ -72,20 +72,40 @@ def run_selftest():
             add("Sound cues", "pass", f"winsound is available ({len(cues.make_cue_wav('mute'))} bytes per cue)")
         except Exception as e:      # noqa: BLE001
             add("Sound cues", "fail", repr(e))
+    elif system.IS_LINUX:
+        be = cues.backend_name()
+        if be:
+            add("Sound cues", "pass", f"{be} is available ({len(cues.make_cue_wav('mute'))} bytes per cue)")
+        else:
+            add("Sound cues", "skip", "install pipewire-pulse / pulseaudio / alsa-utils for sound cues")
     else:
-        add("Sound cues", "skip", "Windows only")
+        add("Sound cues", "skip", "Windows / Linux only")
+
+    # virtual microphone (Linux PipeWire / PulseAudio)
+    if system.IS_LINUX:
+        st = virtual_mic.status()
+        if st.active:
+            add("Virtual microphone", "pass", st.detail)
+        elif st.supported:
+            add("Virtual microphone", "skip", st.detail)
+        else:
+            add("Virtual microphone", "skip", st.detail)
 
     # firewall / startup / network
     if system.IS_WIN:
         try:
             ok = system.firewall_rules_ok(5001)
             add("Windows Firewall rules", "pass" if ok else "fail",
-                "inbound rules for port 5001 exist" if ok else "rules for port 5001 are missing: use Network, Fix firewall")
+                "inbound rules for port 5001 exist" if ok else "rules for port 5001 are missing: use Connections, Fix firewall")
         except Exception as e:      # noqa: BLE001
             add("Windows Firewall rules", "fail", repr(e))
-        add("Start with Windows", "pass", "currently " + ("on" if system.get_startup_enabled() else "off"))
+        add("Start at login", "pass", "currently " + ("on" if system.get_startup_enabled() else "off"))
+    elif system.IS_LINUX:
+        ok, fw_label, fw_detail = system.firewall_summary(5001)
+        add("Firewall (5001/udp,tcp)", "pass" if ok is not False else "skip", f"{fw_label}: {fw_detail}")
+        add("Start at login", "pass", "currently " + ("on" if system.get_startup_enabled() else "off"))
     else:
-        add("Windows Firewall rules", "skip", "Windows only")
+        add("Firewall rules", "skip", "Windows / Linux only")
     ni = system.NetworkInfo()
     found = ni.refresh()
     add("Network adapters", "pass" if found else "fail", ", ".join(i.label() for i in found) or "none found")

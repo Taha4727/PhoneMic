@@ -145,13 +145,13 @@ assert row.enabled is False and row.title_label.cget("fg") == widgets.T.DIM
 app.binder.set(sm.BY_KEY["gate_enabled"], True); assert row.enabled is True
 print("   PASS")
 
-print("8. chain list: lights follow the effects; the voice entry opens the Voice page")
+print("8. chain list: lights follow the effects; voice selects inline in Audio Studio")
 for sid, key in (("comp", "comp_enabled"), ("deess", "deess_enabled"), ("agc", "agc_enabled")):
     app.binder.set(sm.BY_KEY[key], True); assert page.chain.stage_state[sid]["led"] is True
     app.binder.set(sm.BY_KEY[key], False); assert page.chain.stage_state[sid]["led"] is False
 assert page.chain.stage_state["input"]["led"] == "fixed" and page.chain.stage_state["output"]["led"] == "fixed"
-page.chain.on_pick("voice"); assert app.current == "voice"
-app.show_page("sound")
+page.chain.on_pick("voice"); assert app.current == "sound" and page.stage_id == "voice"
+page.pick_stage("noise")
 print("   PASS")
 
 print("9. equalizer editor: drag, wheel, double-click, right-click")
@@ -186,7 +186,7 @@ assert app.import_preset_text(text) == ["Shared (2)"]
 assert app.import_preset_text("{ nope") == [] and "not a valid preset" in app.status_left.cget("text") or "valid preset" in app.status_left.cget("text")
 app.toggle_bypass(); assert p.fx_bypass and app.btn_fx.style_name == "warn" and "bypassed" in app.btn_fx.cget("text")
 tick(1); blk = np.ones(480, np.float32) * 0.1; assert np.array_equal(p.process(blk), blk)
-app.toggle_bypass(); assert not p.fx_bypass and app.btn_fx.style_name == "normal"
+app.toggle_bypass(); assert not p.fx_bypass and app.btn_fx.style_name == "blue"
 assert "<Control-b>" in app.root._bindings and "<Control-f>" in app.root._bindings
 print("   PASS")
 
@@ -197,25 +197,136 @@ app.toggle_record(); tick(2); time.sleep(0.4); tick(1); assert app.btn_record.st
 app.show_page("dashboard"); tick(6); dash = app.pages["dashboard"]
 assert app.chip_text.cget("text") == "Streaming" and dash.g_rate._text.endswith("kbps"), (app.chip_text.cget("text"), dash.g_rate._text)
 assert "Connected from" in dash.hero_sub.cget("text") and "dBFS" in dash.read_label.cget("text")
+dash._viz_mode("pills"); tick(2); assert dash.spectrum.mode == "pills" and cfg.data["visualizer_mode"] == "pills"
+dash._viz_mode("spectrum"); tick(1)
+app.toggle_sidebar(); assert app.sidebar_collapsed is True and cfg.data["app"]["sidebar_collapsed"] is True
+app.toggle_sidebar(); assert app.sidebar_collapsed is False and cfg.data["app"]["sidebar_collapsed"] is False
+# Quick FX pills sync bidirectionally with AudioProcessor / binder
+comp_btn, comp_style = dash.fx_pills["comp_enabled"]
+was_comp = app.proc.comp_enabled
+comp_btn.command(); assert app.proc.comp_enabled is (not was_comp) and comp_btn.style_name == (comp_style if app.proc.comp_enabled else "ghost")
+comp_btn.command(); assert app.proc.comp_enabled is was_comp
+# Quick Output Device switcher stays synced with ConnectPage
+out_vals = list(dash.out_combo.cget("values") or [])
+if len(out_vals) > 1:
+    other_dev = next(n for n in out_vals if n != dash.out_combo.get())
+    dash.out_combo.command(other_dev)
+    assert rx.main_dev.name == other_dev and app.pages["connect"].out_combo.get() == other_dev
+# Responsive two-tier header & Dashboard 2-col / 1-col + hero + QuickFX reflow
+app._layout_header(900); assert app._header_wide is True and app.search.packed[1]["row"] == 0
+app._layout_header(600); assert app._header_wide is False and app.search.packed[1]["row"] == 1
+dash._layout_hero(700); assert dash._hero_cols == 2 and dash.h_right.packed[1]["row"] == 0
+dash._layout_hero(500); assert dash._hero_cols == 1 and dash.h_right.packed[1]["row"] == 1
+dash._layout_hero(700)
+dash._layout_fx(600); assert dash._fx_wide is True
+dash._layout_fx(440); assert dash._fx_wide is False and dash._fx_buttons[-1].packed[1]["row"] == 1
+dash._layout_fx(600)
+dash._reflow(780); assert dash._layout_cols == 2 and dash.col_right.packed[1]["row"] == 0
+dash._reflow(480); assert dash._layout_cols == 1 and dash.col_right.packed[1]["row"] == 1
+dash._reflow(780); app._layout_header(720)
+# LogPage 4-col vs 2x2 tiles reflow
+app.show_page("log"); lp = app.pages["log"]
+lp._layout_tiles(700); assert lp._tile_cols == 4 and lp.t_dsp.packed[1]["row"] == 0
+lp._layout_tiles(500); assert lp._tile_cols == 2 and lp.t_dsp.packed[1]["row"] == 1
+lp._layout_tiles(700)
+# LevelMeter scale labels fit cleanly without bottom clipping or clip-LED overlap
+dash.meter._opts["width"], dash.meter._opts["height"] = 420, 42
+dash.meter._build_key = None
+dash.meter._build()
+text_items = [it for it in dash.meter.items.values() if it["type"] == "text"]
+assert [it["opts"]["text"] for it in text_items] == ["-60", "-48", "-36", "-24", "-12", "-6", "0"]
+assert all(it["coords"][1] <= 27 for it in text_items), text_items
+assert text_items[-1]["opts"]["anchor"] == "ne"
+
+# ConnectPage responsive stack & empty/populated device safety
+app.show_page("connect"); conn = app.pages["connect"]; cols = conn.body.winfo_children()[0]
+for cw in (360, 540, 660, 940):
+    cols._reflow(cw)
+cols._reflow(540); assert cols._cols == 1
+cols._reflow(940); assert cols._cols == 2
+saved_devs = list(rx.devices)
+rx.devices = []
+conn.fill_devices(); conn.refresh_addresses(); tick(1)
+rx.devices = saved_devs
+conn.fill_devices(); tick(1)
+assert not app._err_seen, app._err_seen
+
+# LevelMeter and SpectrumView idle fast-path settles cleanly
+app.show_page("dashboard")
+for _ in range(40):
+    dash.meter.update_levels(-80.0, -80.0, -80.0, False)
+    dash.spectrum.idle()
+assert dash.meter._idle_settled is True and dash.spectrum._idle_settled is True
 print("   PASS chip:", app.chip_text.cget("text"), "| bitrate gauge:", dash.g_rate._text, "| delay gauge:", dash.g_latency._text)
 
-print("12. setup wizard")
+print("12. setup wizard, lazy settings tabs, and compact mode toggle")
+sp = app.pages["settings"]
+assert sp.card_general is not None
+sp._pick_tab("shortcuts"); assert sp.card_keys is not None and "shortcuts" in sp.tabs
+sp._pick_tab("recording"); assert sp.card_rec is not None and "recording" in sp.tabs
+sp._pick_tab("general")
 cfg.data["app"]["first_run_done"] = False
 app.show_page("wizard"); wz = app.pages["wizard"]; wz.on_show(); assert wz.step == 0
+wz._fit_card(640); assert wz.body._colcfg[0]["minsize"] == 0
 for expect in (1, 2, 3, 4):
     wz.next(); assert wz.step == expect; tick(2); wz.refresh_fast(); wz.refresh_slow()
 wz.choose("speakers"); wz.go(1); wz.choose("mic"); wz.back(); assert wz.step == 0
 wz.go(4); wz.next()
 assert cfg.data["app"]["first_run_done"] is True and app.current == "dashboard"
+app.toggle_ui_mode(); assert app.ui_mode == "minimal" and app.minimal_view is not None
+tick(2); app.minimal_view._step_gain(1.5); assert abs(p.out_gain_db - 1.5) < 1e-6
+app.minimal_view._set_gain(0.0)
+app.toggle_ui_mode(); assert app.ui_mode == "default"
 print("   PASS")
 
-print("13. accent colour is applied before any widget is created")
+print("13. live theme rebuild, monochrome/soft modes, and binder scope cleanup")
 saved = widgets.T.ACCENT
-widgets.apply_accent("violet"); assert widgets.T.ACCENT == widgets.ACCENTS["violet"][0] and widgets.FlatButton.STYLES["primary"][0] == widgets.T.ACCENT
-widgets.apply_accent("teal"); assert widgets.T.ACCENT == saved
+widgets.apply_accent("blue"); assert widgets.T.ACCENT == widgets.ACCENTS["blue"][0] and widgets.FlatButton.STYLES["primary"][0] == widgets.T.ACCENT
+widgets.apply_accent("mono"); assert widgets.T.IS_MONO and widgets.T.ACCENT == widgets.ACCENTS["mono"][0]
+widgets.apply_accent("teal", soft=True); assert widgets.T.SOFT_COLORS and widgets.T.ACCENT == widgets.SOFT_ACCENTS["teal"][0]
+widgets.apply_accent("teal", soft=False); assert not widgets.T.SOFT_COLORS and not widgets.T.IS_MONO and widgets.T.ACCENT == saved
+
+# Full live rebuild via binder on Settings(recording tab) & Sound(eq stage) without leaking binder callbacks
+app.show_page("settings"); app.pages["settings"]._pick_tab("recording")
+base_any = len(app.binder.any_listeners)
+app.binder.set(sm.BY_KEY["app.accent"], "blue")
+assert app.current == "settings" and app.pages["settings"].active_tab == "recording"
+assert widgets.T.ACCENT == widgets.ACCENTS["blue"][0] and "Restart" not in app.status_left.cget("text")
+app.binder.set(sm.BY_KEY["app.accent"], "mono")
+assert widgets.T.IS_MONO and app.pages["settings"].active_tab == "recording"
+app.show_page("sound"); app.pages["sound"].pick_stage("eq"); app.pages["sound"].eq_pick(2)
+app.binder.set(sm.BY_KEY["app.soft_colors"], True)
+assert app.current == "sound" and app.pages["sound"].stage_id == "eq" and app.pages["sound"].eq_band == 2
+app.binder.set(sm.BY_KEY["app.soft_colors"], False)
+app.binder.set(sm.BY_KEY["app.accent"], "teal")
+assert len(app.binder.any_listeners) == base_any, (len(app.binder.any_listeners), base_any)
+assert not widgets.T.IS_MONO and not widgets.T.SOFT_COLORS and widgets.T.ACCENT == saved
+app.show_page("dashboard"); tick(2)
 print("   PASS")
 
-print("14. settings are saved on exit")
+print("14. settings are saved on exit & pythonw-safe crash logger works without stderr")
+import sys
+import phonemic_receiver
+old_stderr, old_hook = sys.stderr, sys.excepthook
+old_crash_fn = system.crash_log_path
+crash_dir = tempfile.mkdtemp()
+crash_file = os.path.join(crash_dir, "phonemic_crash.log")
+try:
+    system.crash_log_path = lambda: crash_file
+    sys.stderr = None
+    writer = phonemic_receiver.install_crash_handlers(lambda: None)
+    try:
+        raise RuntimeError("synthetic connect failure")
+    except RuntimeError:
+        writer(*sys.exc_info(), "smoke test")
+    if getattr(writer, "_fault_file", None) is not None:
+        writer._fault_file.close()
+    assert os.path.exists(crash_file) and "synthetic connect failure" in open(crash_file, encoding="utf-8").read()
+finally:
+    sys.stderr = old_stderr
+    sys.excepthook = old_hook
+    system.crash_log_path = old_crash_fn
+
 stop.set(); app.on_close()
 saved_cfg = json.load(open(os.path.join(d, "c.json")))
 assert "Evening stream" in saved_cfg["user_fx_presets"] and "eq3_gain" in saved_cfg["studio_fx"] and saved_cfg["app"]["first_run_done"] is True

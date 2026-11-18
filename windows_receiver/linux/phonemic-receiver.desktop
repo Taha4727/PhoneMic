@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PhoneMic Receiver
+GenericName=Network Microphone Receiver
+Comment=Use your Android phone as a low-latency studio microphone
+Exec=phonemic-receiver %U
+Icon=phonemic-receiver
+Terminal=false
+Categories=AudioVideo;Audio;Recorder;
+Keywords=microphone;audio;android;pipewire;pulseaudio;streaming;
+StartupNotify=true
+StartupWMClass=PhoneMicReceiver

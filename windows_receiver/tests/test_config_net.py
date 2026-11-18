@@ -32,6 +32,11 @@ def test_ipconfig_english_and_german():
     assert [(i.category, i.ip) for i in system.parse_ipconfig(DE)] == [("Wi-Fi", "192.168.178.23"), ("USB Tether", "192.168.29.100")]
 
 
+def test_ip_addr_linux():
+    sample = "1: lo inet 127.0.0.1/8 scope host lo\n2: wlp2s0 inet 192.168.1.50/24 brd 192.168.1.255 scope global wlp2s0\n3: usb0 inet 192.168.42.10/24 brd 192.168.42.255 scope global usb0\n"
+    assert [(i.category, i.ip) for i in system.parse_ip_addr(sample)] == [("Wi-Fi", "192.168.1.50"), ("USB Tether", "192.168.42.10")]
+
+
 def test_v08_config_migrates():
     d = tempfile.mkdtemp(); p = os.path.join(d, "c.json")
     json.dump({"version": "0.8.0", "visualizer_mode": "oscilloscope",

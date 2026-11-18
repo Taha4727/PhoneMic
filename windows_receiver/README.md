@@ -2,10 +2,24 @@
 > **🤖 100% Made With AI**  
 > This entire receiver engine, GUI, DSP chain, and CLI tool were authored using Artificial Intelligence.
 
-# PhoneMic Windows Receiver v1.2.0
+# PhoneMic Receiver v1.3.0 (Windows & Linux)
 
-Turn your Android phone into a low-latency PC microphone over **Wi-Fi** or **USB tethering**.
+Turn your Android phone into a low-latency PC microphone over **Wi-Fi** or **USB tethering** on **Windows 10/11** and **Linux (Arch Linux / PipeWire)**.
 The wire protocol is unchanged, so the Android app needs no update, and settings from earlier versions are carried over.
+
+---
+
+## What's new in 1.3.0
+
+### Obsidian Studio Interface & Live Theming
+* **Streamlined Studio Workspace**: Refined header, Discord-style compact navigation rail, OBS-style live telemetry, and quick-access Studio Home controls (Signal Monitor, Quick FX, gain, mute, output device picker) designed to fit cleanly without scrolling at default window dimensions.
+* **Improved Signal Monitor & Meter Readability**: Fixed squashed meter layout so numeric dBFS scale labels, peak-hold markers, and clipping indicators stay clearly readable alongside the spectrum visualizer.
+* **Live Theme & Monochrome Rebuild**: Switching accent themes or toggling monochrome mode now updates all open pages, cards, and widgets immediately.
+
+### Stability, Crash Diagnostics & CLI Parity
+* **Connections Page & Layout Stability**: Debounced responsive `<Configure>` handlers and refined column sizing prevent crash loops when opening Connections.
+* **Guaranteed Crash Logging (`pythonw.exe`)**: Added `faulthandler` and write-verified crash log paths so fatal UI or native errors always leave diagnostics in `phonemic_crash.log`.
+* **Standalone CLI `v1.3.0` (`phonemic_cli.py`)**: Added `-V`/`--version`, strict `1`–`65535` `--port` validation, Windows console ANSI support, 32-bit uint32 sequence gap tracking, even-byte UDP payload guards, and clean socket shutdown timeouts.
 
 ---
 
@@ -94,6 +108,7 @@ The wire protocol is unchanged, so the Android app needs no update, and settings
 
 ## Running
 
+### Windows
 **Standalone:** double-click `PhoneMicReceiver.exe` (see *Building* below).
 
 **From source:** Python 3.8+, then
@@ -101,11 +116,26 @@ The wire protocol is unchanged, so the Android app needs no update, and settings
 pip install -r requirements.txt
 python phonemic_receiver.py
 ```
-or just double-click `start_receiver.bat` (installs the two packages on first run).
-
-Command line: `--cli` (console mode) - `--check` (environment check) - `--selftest` - `--list-devices` - `--port N` - `--minimized` - `--reset-config` - `--version`
+or just double-click `start_receiver.bat` (installs the packages on first run).
 
 First start: click **Network -> Fix firewall** once (or run `fix_firewall.bat`), then on the phone tap **Scan / Auto-Detect PC**.
+
+### Linux (Arch Linux / PipeWire)
+**Automated setup (recommended):** creates a `.venv` with `--system-site-packages`, checks Arch dependencies (`python`, `portaudio`, `tk`, `pipewire-pulse`), and installs an XDG launcher and desktop entry:
+```bash
+cd windows_receiver
+./setup_linux.sh
+./start_receiver.sh
+```
+
+**Arch Linux package (`makepkg`):**
+```bash
+cd windows_receiver/linux
+makepkg -si
+phonemic-receiver
+```
+
+Command line: `--cli` (console mode) - `--check` (environment check) - `--selftest` - `--list-devices` - `--port N` - `--minimized` - `--reset-config` - `--create-virtual-mic` - `--remove-virtual-mic` - `--virtual-mic-status` - `--version`
 
 ### Wi-Fi
 1. Phone and PC on the same network. 2. Choose **Wi-Fi** in the app. 3. Scan / Auto-Detect, or type the address from the Dashboard. 4. Start streaming.
@@ -113,11 +143,11 @@ First start: click **Network -> Fix firewall** once (or run `fix_firewall.bat`),
 ### USB tethering (lowest latency)
 1. Plug in the phone, enable **USB tethering** in Android settings. 2. Choose **USB** in the app.
 3. The receiver lists the tether address (green "USB Tether" badge on the Network page). 4. Scan or type it, start streaming.
-5. If nothing arrives, press **Fix firewall**: Windows treats the tether as a *Public* network and blocks it by default.
+5. If nothing arrives, press **Fix firewall** (or **Configure Firewall** on Linux): Windows treats the tether as a *Public* network, and `ufw`/`firewalld` on Linux may block incoming UDP/TCP 5001 by default.
 
 ### Using it in Discord / OBS / Zoom
-Install the free [VB-CABLE](https://vb-audio.com/Cable/). The receiver selects **CABLE Input** automatically; in the other app choose
-**CABLE Output (VB-Audio Virtual Cable)** as the microphone. *Audio Devices -> Play test tone* confirms the routing.
+* **Windows:** Install the free [VB-Audio Virtual Cable](https://vb-audio.com/Cable/). The receiver selects **CABLE Input** automatically; in the other app choose **CABLE Output (VB-Audio Virtual Cable)** as the microphone. *Audio Devices -> Play test tone* confirms the routing.
+* **Linux (PipeWire / PulseAudio):** By default PhoneMic automatically creates **`PhoneMic_Sink`** (output target) paired with **`PhoneMic_Virtual_Mic`** (virtual microphone input) when the receiver starts, and routes PortAudio directly to `PhoneMic_Sink` while keeping sound cues on your speakers. Select **`PhoneMic Virtual Mic`** as the input device in Discord, OBS, or Firefox/Chromium. You can also manage modules manually via **Create Virtual Mic / Remove Virtual Mic** in the GUI (plus **Sound Mixer** / **Patchbay** buttons) or `--create-virtual-mic` / `--remove-virtual-mic`.
 
 ---
 
@@ -158,10 +188,10 @@ If you build with GitHub Actions, make sure the workflow still builds from `Phon
 | "Port in use" in the header | Another receiver (or program) owns the port. Close it, or change the port on the Network page (and on the phone). |
 | Connected but silent | **Audio Devices**: pick the right output and press *Play test tone*. In Discord/OBS pick *CABLE Output*. |
 | Crackling | Raise the latency profile one step, keep Adaptive on, prefer USB over Wi-Fi, try backend *WASAPI*. |
-| Output device missing | Press *Refresh devices*, or switch the backend (some devices only appear under MME/DirectSound). |
-| Anything weird | **Diagnostics -> Copy log**; a crash writes `phonemic_crash.log` next to the app. |
+| Output device missing | Press *Refresh devices*, or switch the backend (WASAPI/MME on Windows; PipeWire/PulseAudio on Linux). |
+| Anything weird | **Diagnostics -> Copy log**; a crash writes `phonemic_crash.log` next to the app or in the config folder. |
 
-Settings live in `phonemic_config.json` next to the app (or `%LOCALAPPDATA%\PhoneMic` if that folder is read-only).
+Settings live in `phonemic_config.json` next to the app (portable mode) or `%LOCALAPPDATA%\PhoneMic` on Windows / `~/.config/phonemic` on Linux (`$XDG_CONFIG_HOME/phonemic`, overridable with `PHONEMIC_CONFIG_DIR`).
 
 ---
 
@@ -170,10 +200,14 @@ Settings live in `phonemic_config.json` next to the app (or `%LOCALAPPDATA%\Phon
 ## Project layout
 ```
 phonemic_receiver.py      launcher (GUI / --cli / --check)
+start_receiver.sh         Linux source launcher (.venv or system python3)
+setup_linux.sh            Arch / Linux setup script (packages, .venv, desktop entry)
+linux/                    Arch PKGBUILD, phonemic-receiver wrapper, .desktop entry
 phonemic/
   const.py                protocol + audio constants, version
   config.py               typed settings, migration, validation, debounced atomic saves
   system.py               paths, firewall, network discovery, startup entry, audio device listing
+  virtual_mic.py          Linux PipeWire/PulseAudio virtual sink + remap source lifecycle
   dsp.py                  biquads, denoiser, gate, AGC, compressor, de-esser, delay, limiter, voice changer, processor chain
   engine.py               jitter buffer, rings, UDP/TCP/beacon, output ports, recorder, Receiver facade
   settings_meta.py        THE table of every setting: label, summary, explanation, range, default, units
@@ -182,11 +216,11 @@ phonemic/
   widgets.py / ui_kit.py  dark widget kit, registry-driven rows, signal-chain list, EQ editor, gauges, search
   gui.py / pages.py       window, Dashboard and the other pages
   wizard.py               first-run setup
-  hotkeys.py              global shortcuts: parsing, keyboard/mouse polling, capture
-  tray.py / cues.py       tray icon (optional pystray), sound cues
-  selftest.py             checks for the Windows-only features
+  hotkeys.py              shortcuts & Windows global keyboard/mouse polling
+  tray.py / cues.py       tray icon (optional pystray), sound cues (winsound / pw-play / paplay / aplay)
+  selftest.py             checks for platform integrations (tray, cues, virtual mic, firewall, shortcuts)
   cli.py                  console mode, dependency check
-installer/                Inno Setup script and build_installer.bat
+installer/                Inno Setup script and build_installer.bat (Windows)
 tools/gen_settings_doc.py regenerates SETTINGS.md from the registry
 tests/                    python tests/run_all.py  (no sound card, no Tk, no network needed)
 ```

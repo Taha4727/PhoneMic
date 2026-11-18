@@ -11,8 +11,11 @@ The implementation lives in the `phonemic` package next to this file.
 """
 import os
 import sys
+import time
+import tempfile
 import argparse
 import traceback
+import faulthandler
 
 if not getattr(sys, "frozen", False):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,25 +33,79 @@ def message_box(text, title=APP_NAME, error=False):
             return
         except Exception:
             pass
-    print(f"{title}: {text}", file=sys.stderr)
+    elif system.IS_LINUX and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        import shutil
+        import subprocess
+        try:
+            if shutil.which("zenity"):
+                flag = "--error" if error else "--info"
+                subprocess.run(["zenity", flag, "--title", title, "--text", text], timeout=10)
+                return
+            if shutil.which("kdialog"):
+                flag = "--error" if error else "--msgbox"
+                subprocess.run(["kdialog", flag, text, "--title", title], timeout=10)
+                return
+        except Exception:
+            pass
+    if sys.stderr is not None:
+        print(f"{title}: {text}", file=sys.stderr)
+
+
+def _open_crash_file():
+    candidates = [system.crash_log_path(), os.path.join(tempfile.gettempdir(), "phonemic_crash.log")]
+    for path in candidates:
+        try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            return open(path, "a", encoding="utf-8", buffering=1), path
+        except OSError:
+            continue
+    return None, candidates[0]
 
 
 def install_crash_handlers(rx_getter=lambda: None):
-    def write(exc_type, exc, tb, where):
-        text = "".join(traceback.format_exception(exc_type, exc, tb))
+    fault_file, fault_path = _open_crash_file()
+    if fault_file is not None:
         try:
-            with open(system.crash_log_path(), "a", encoding="utf-8") as f:
-                f.write(f"--- {where} v{VERSION} ---\n{text}\n")
+            faulthandler.enable(file=fault_file, all_threads=True)
         except Exception:
             pass
+    elif sys.stderr is not None:
+        try:
+            faulthandler.enable(all_threads=True)
+        except Exception:
+            pass
+
+    def write(exc_type, exc, tb, where):
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        entry = f"--- [{stamp}] {where} v{VERSION} ---\n{text}\n"
+        wrote = False
+        for path in (system.crash_log_path(), fault_path, os.path.join(tempfile.gettempdir(), "phonemic_crash.log")):
+            try:
+                parent = os.path.dirname(path)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(entry)
+                wrote = True
+                break
+            except Exception:
+                continue
+        if not wrote and sys.stderr is not None:
+            try:
+                print(entry, file=sys.stderr)
+            except Exception:
+                pass
         rx = rx_getter()
         if rx is not None:
             rx.log.error(f"{where}: {exc!r}")
         return text
 
     def hook(exc_type, exc, tb):
-        text = write(exc_type, exc, tb, "unhandled exception")
-        message_box(f"An unexpected error occurred:\n\n{exc!r}\n\nDetails were saved to:\n{system.crash_log_path()}", error=True)
+        write(exc_type, exc, tb, "unhandled exception")
+        message_box(f"An unexpected error occurred:\n\n{exc!r}\n\nDetails were saved to:\n{fault_path}", error=True)
 
     sys.excepthook = hook
     try:
@@ -56,6 +113,7 @@ def install_crash_handlers(rx_getter=lambda: None):
         threading.excepthook = lambda a: write(a.exc_type, a.exc_value, a.exc_traceback, f"thread {a.thread.name if a.thread else '?'}")
     except Exception:
         pass
+    write._fault_file = fault_file
     return write
 
 
@@ -77,6 +135,9 @@ def parse_args(argv):
     p.add_argument("--port", type=valid_port, help="listen on this port (1-65535, saved to settings)")
     p.add_argument("--minimized", action="store_true", help="start minimized")
     p.add_argument("--reset-config", action="store_true", help="reset settings to defaults (keeps your presets)")
+    p.add_argument("--create-virtual-mic", action="store_true", help="create Linux PipeWire/PulseAudio PhoneMic virtual mic and exit")
+    p.add_argument("--remove-virtual-mic", action="store_true", help="remove Linux PhoneMic virtual mic modules and exit")
+    p.add_argument("--virtual-mic-status", action="store_true", help="show virtual microphone status and exit")
     p.add_argument("--version", action="store_true", help="print version and exit")
     return p.parse_args(argv)
 
@@ -86,6 +147,21 @@ def main(argv=None):
     if args.version:
         print(f"{APP_NAME} {VERSION}")
         return 0
+    if args.virtual_mic_status:
+        from phonemic import virtual_mic
+        st = virtual_mic.status()
+        print(f"[{st.backend}] active={st.active}: {st.detail}")
+        return 0 if st.active else 1
+    if args.create_virtual_mic:
+        from phonemic import virtual_mic
+        ok, msg, _ = virtual_mic.create_virtual_mic()
+        print(msg)
+        return 0 if ok else 1
+    if args.remove_virtual_mic:
+        from phonemic import virtual_mic
+        ok, msg = virtual_mic.remove_virtual_mic(session_only=False)
+        print(msg)
+        return 0 if ok else 1
     if args.check:
         return 0 if run_interactive_dependency_fixer() else 1
     if args.list_devices:
@@ -129,7 +205,8 @@ def main(argv=None):
     try:
         if use_gui:
             from phonemic.gui import App
-            app = App(rx, start_minimized=args.minimized or cfg.data["app"]["start_minimized"])
+            app = App(rx, start_minimized=args.minimized or cfg.data["app"]["start_minimized"],
+                      crash_writer=write_crash)
             app.root.report_callback_exception = lambda t, v, tb: write_crash(t, v, tb, "UI callback")
             app.run()
         else:
@@ -140,6 +217,16 @@ def main(argv=None):
         finally:
             cfg.close()
             system.set_timer_resolution(1, False)
+            try:
+                faulthandler.disable()
+            except Exception:
+                pass
+            ff = getattr(write_crash, "_fault_file", None)
+            if ff is not None:
+                try:
+                    ff.close()
+                except Exception:
+                    pass
     return 0
 
 

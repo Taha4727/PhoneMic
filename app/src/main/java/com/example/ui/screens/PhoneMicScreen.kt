@@ -507,7 +507,8 @@ fun PhoneMicScreen(
                                 ip = uiState.ip,
                                 port = uiState.port,
                                 connectionMode = uiState.connectionMode,
-                                elapsedSeconds = uiState.elapsedSeconds
+                                elapsedSeconds = uiState.elapsedSeconds,
+                                audioQuality = uiState.audioQuality
                             )
 
                             OutlinedButton(

@@ -20,7 +20,7 @@ from collections import deque
 
 import numpy as np
 
-from . import system
+from . import system, virtual_mic
 from .const import (VERSION, FRAME, FRAME_MS, SAMPLE_RATE, PACKET_MAGIC, PACKET_MAGIC_24K, PACKET_MAGIC_16K,
                     DISCOVERY_PROBE, DISCOVERY_REPLY, CMD_PAUSE, CMD_RESUME, SIO_UDP_CONNRESET)
 from .dsp import AudioProcessor
@@ -405,6 +405,7 @@ class Ring:
 # OUTPUT PORT (one PortAudio stream fed from a Ring by callback)
 # ==============================================================================
 LATENCY_MODES = {"low": "low", "medium": 0.04, "high": 0.10}
+_PA_OPEN_LOCK = threading.Lock()
 
 
 class OutputPort:
@@ -461,6 +462,7 @@ class OutputPort:
             except Exception:
                 pass
         chans = [2, 1] if (dev is None or dev.channels >= 2) else [1]
+        sink_name = getattr(dev, "sink_name", "") if dev is not None else ""
         last = None
         for extra in extras:
             for ch in chans:
@@ -471,8 +473,31 @@ class OutputPort:
                                   device=None if dev is None else dev.index)
                         if extra is not None:
                             kw["extra_settings"] = extra
-                        s = self.sd.OutputStream(**kw)
-                        s.start()
+                        if system.IS_LINUX and getattr(self.sd, "__name__", "") != "fake_sd":
+                            with _PA_OPEN_LOCK:
+                                prev_pw = os.environ.get("PIPEWIRE_NODE")
+                                prev_pa = os.environ.get("PULSE_SINK")
+                                try:
+                                    if sink_name:
+                                        os.environ["PIPEWIRE_NODE"] = sink_name
+                                        os.environ["PULSE_SINK"] = sink_name
+                                    else:
+                                        os.environ.pop("PIPEWIRE_NODE", None)
+                                        os.environ.pop("PULSE_SINK", None)
+                                    s = self.sd.OutputStream(**kw)
+                                    s.start()
+                                finally:
+                                    if prev_pw is None:
+                                        os.environ.pop("PIPEWIRE_NODE", None)
+                                    else:
+                                        os.environ["PIPEWIRE_NODE"] = prev_pw
+                                    if prev_pa is None:
+                                        os.environ.pop("PULSE_SINK", None)
+                                    else:
+                                        os.environ["PULSE_SINK"] = prev_pa
+                        else:
+                            s = self.sd.OutputStream(**kw)
+                            s.start()
                         self.stream, self.channels = s, ch
                         try:
                             self.latency_ms = float(s.latency) * 1000.0
@@ -892,6 +917,7 @@ class Receiver:
         self.monitor_dev = None
 
         self._thread = None
+        self._created_virtual_mic = False
         self._reset_dsp = False
         self._last_raw = None
         self._plc_run = 0
@@ -911,6 +937,18 @@ class Receiver:
                 ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x8000)  # ABOVE_NORMAL
             except Exception:
                 pass
+        if (
+            system.IS_LINUX
+            and getattr(self.sd, "__name__", "") != "fake_sd"
+            and self.config.data["audio"].get("linux_auto_virtual_mic", True)
+            and virtual_mic.pactl_available()
+        ):
+            ok, msg, created = virtual_mic.create_virtual_mic()
+            self._created_virtual_mic = bool(created)
+            if ok:
+                self.log.info(msg)
+            else:
+                self.log.warn(msg)
         self.refresh_devices(initial=True)
         self.open_main()
         self.net.start(self.config.data["network"]["port"])
@@ -927,6 +965,56 @@ class Receiver:
             self._thread.join(timeout=2.0)
         self.main.close()
         self.monitor.close()
+        if (
+            system.IS_LINUX
+            and getattr(self.sd, "__name__", "") != "fake_sd"
+            and self._created_virtual_mic
+            and self.config.data["audio"].get("linux_cleanup_virtual_mic", True)
+        ):
+            ok, msg = virtual_mic.remove_virtual_mic(session_only=True)
+            self._created_virtual_mic = False
+            if ok:
+                self.log.info(msg)
+            else:
+                self.log.warn(msg)
+
+    def ensure_virtual_mic(self):
+        """Create Linux virtual mic, refresh devices, and route to it if currently unconfigured or on fallback."""
+        if not system.IS_LINUX:
+            return False, "Virtual microphone management via pactl is Linux-only."
+        ok, msg, created = virtual_mic.create_virtual_mic()
+        if created:
+            self._created_virtual_mic = True
+        self.refresh_devices()
+        if ok:
+            pool = system.devices_for_api(self.devices, self.api)
+            virt = next((d for d in pool if d.is_cable), None)
+            if virt and (not self.config.data["target_device_name"] or (self.main_dev and self.main_dev.is_cable)):
+                self.set_output_device(virt)
+            elif self.main_dev:
+                self.open_main()
+            self.log.info(msg)
+        else:
+            self.log.warn(msg)
+        return ok, msg
+
+    def remove_virtual_mic(self, session_only=False):
+        """Unload Linux virtual mic modules and switch output back to default device if needed."""
+        if not system.IS_LINUX:
+            return False, "Virtual microphone management via pactl is Linux-only."
+        was_on_virt = bool(self.main_dev and self.main_dev.is_cable)
+        ok, msg = virtual_mic.remove_virtual_mic(session_only=session_only)
+        if ok:
+            self._created_virtual_mic = False
+            if was_on_virt:
+                self.config.data["target_device_name"] = None
+                self.config.save_soon()
+            self.refresh_devices()
+            self.open_main()
+            self.log.info(msg)
+        else:
+            self.log.warn(msg)
+        return ok, msg
 
     # -- devices ---------------------------------------------------------------------
     def refresh_devices(self, initial=False):

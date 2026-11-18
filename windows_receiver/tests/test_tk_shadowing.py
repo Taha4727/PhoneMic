@@ -49,14 +49,26 @@ METHODS = {
 BASES_WITH_GET_SET = {"Combo": {"get", "set", "current"}, "Scrollbar": {"get", "set"}}
 
 
+# Internal methods of CustomTkinter widgets that subclasses must never accidentally override
+CTK_INTERNALS = {
+    "_draw", "_update_dimensions_event", "_set_scaling", "_set_dimensions", "_set_appearance_mode",
+    "_on_enter", "_on_leave", "_clicked", "_create_grid", "_create_bindings",
+}
+
+WIDGET_BASES = {
+    "_ButtonBase", "_ToggleBase", "_ComboBase", "_FrameBase", "_ScrollBase",
+    "_SearchBase", "_MinimalBase", "Page",
+}
+
+
 def _classes():
     base = os.path.join(_path.ROOT, "phonemic")
-    for fn in ("widgets.py", "gui.py", "pages.py"):
+    for fn in ("widgets.py", "ui_kit.py", "gui.py", "pages.py", "minimal_gui.py", "wizard.py"):
         tree = ast.parse(open(os.path.join(base, fn), encoding="utf-8").read())
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 bases = [ast.unparse(b) for b in node.bases]
-                if any(b.startswith(("tk.", "ttk.")) or b == "Page" for b in bases):
+                if any(b.startswith(("tk.", "ttk.", "ctk.")) or b in WIDGET_BASES for b in bases):
                     yield fn, node, bases
 
 
@@ -78,16 +90,17 @@ def _own_names(node):
 def test_no_widget_shadows_tkinter_internals():
     bad = []
     for fn, node, bases in _classes():
+        is_ctk = any(b.startswith("ctk.") or b in WIDGET_BASES - {"Page"} for b in bases)
         for name, line in _own_names(node).items():
-            reserved = name in STATE or name in METHODS
+            reserved = name in STATE or name in METHODS or (is_ctk and name in CTK_INTERNALS)
             # Combo/ttk bases legitimately keep get/set; our own Canvas/Frame helpers named set/get/config are fine
-            if name in ("set", "get") and not any("Combobox" in b for b in bases):
+            if name in ("set", "get") and not any("Combobox" in b or "_ComboBase" in b for b in bases):
                 reserved = False
             if node.name in ("Page",) or any(b == "Page" for b in bases):
                 if name in ("build", "on_show", "refresh_fast", "refresh_slow"):
                     reserved = False
             if reserved:
-                bad.append(f"{fn}:{line} {node.name}({', '.join(bases)}) shadows tkinter name '{name}'")
+                bad.append(f"{fn}:{line} {node.name}({', '.join(bases)}) shadows toolkit name '{name}'")
     assert not bad, "\n" + "\n".join(bad)
 
 

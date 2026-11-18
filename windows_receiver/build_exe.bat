@@ -3,7 +3,7 @@ title Build PhoneMicReceiver.exe (PyInstaller)
 color 0b
 
 echo ===============================================================================
-echo            PhoneMic Windows Receiver - Standalone .EXE Builder (v1.2.0)
+echo            PhoneMic Windows Receiver - Standalone .EXE Builder (v1.3.0)
 echo ===============================================================================
 echo.
 echo   build_exe.bat            single portable .exe   (starts in a few seconds)
@@ -21,11 +21,11 @@ python --version >nul 2>&1
 if errorlevel 1 goto :no_python
 
 :: 2. Build dependencies
-echo [*] Checking build dependencies (pyinstaller, sounddevice, numpy, pystray, pillow)...
-python -c "import PyInstaller, sounddevice, numpy, pystray, PIL" >nul 2>&1
+echo [*] Checking build dependencies (pyinstaller, customtkinter, sounddevice, numpy, pystray, pillow)...
+python -c "import PyInstaller, customtkinter, sounddevice, numpy, pystray, PIL" >nul 2>&1
 if not errorlevel 1 goto :deps_ok
 echo [*] Installing missing packages via pip...
-python -m pip install pyinstaller sounddevice numpy pystray pillow
+python -m pip install pyinstaller customtkinter sounddevice numpy pystray pillow
 if errorlevel 1 goto :pip_failed
 :deps_ok
 echo [OK] Build environment ready.

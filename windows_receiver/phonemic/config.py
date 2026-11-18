@@ -13,7 +13,7 @@ DEFAULTS = {
     "version": VERSION,
     "target_device_name": None,      # main output (kept from v0.8)
     "monitor_device_name": None,
-    "visualizer_mode": "spectrum",   # spectrum | scope
+    "visualizer_mode": "spectrum",   # spectrum | pills | scope
     "studio_fx": {"active_preset": "Default (Studio Clean)", **FX_BASE},
     "voice_changer": {
         "enabled": False,
@@ -32,7 +32,7 @@ DEFAULTS = {
         "stream_timeout_s": 1.5,     # silence for this long = "connection lost"
     },
     "audio": {
-        "api": "auto",               # auto | WASAPI | DirectSound | MME
+        "api": "auto",               # auto | WASAPI | DirectSound | MME | PipeWire | PulseAudio | ALSA
         "jitter_ms": 30,             # target playout buffer (Balanced)
         "adaptive_jitter": True,
         "output_latency": "low",     # low | medium | high  (PortAudio stream latency)
@@ -41,6 +41,8 @@ DEFAULTS = {
         "plc_mode": "repeat",        # repeat (repeat + fade the last frame) | silence
         "out_channels": "both",      # both | left | right
         "high_priority": True,
+        "linux_auto_virtual_mic": True,
+        "linux_cleanup_virtual_mic": True,
     },
     "hotkeys": {
         "enabled": True,             # global shortcuts (work in any app, including games)
@@ -65,6 +67,8 @@ DEFAULTS = {
         "close_to_tray": False,      # the close button hides the window instead of quitting
         "advanced_mode": False,      # show every setting, not just the essentials
         "accent": "teal",            # applied at start-up
+        "soft_colors": False,        # softer eye-comfort highlights
+        "sidebar_collapsed": False,  # collapse side panel to 64px icon rail
         "first_run_done": False,
         "window_geometry": "",
         "ui_mode": "default",        # default (full studio) | minimal (compact mini widget)
@@ -173,6 +177,8 @@ class ConfigManager:
             self.data["user_fx_presets"][name] = sanitize_fx(p)
         for name, p in list(self.data["user_voice_presets"].items()):
             self.data["user_voice_presets"][name] = sanitize_voice(p)
+        if self.data["app"].get("accent") == "violet":
+            self.data["app"]["accent"] = "blue"
 
     def _migrate(self, saved):
         old_ver = _version_tuple(saved.get("version", "0.0.0"))

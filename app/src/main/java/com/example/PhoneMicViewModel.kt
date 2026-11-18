@@ -51,11 +51,11 @@ data class PhoneMicUiState(
     val isOverlayEnabled: Boolean = false,
     val showQrScanner: Boolean = false,
     val audioQuality: PhoneMicService.Companion.AudioQuality = PhoneMicService.Companion.AudioQuality.STUDIO_48K,
-    // Stream telemetry matched with Windows Receiver v0.6.5
+    // Stream telemetry matched with Windows Receiver
     val packetsSent: Long = 0L,
     val bytesSent: Long = 0L,
     val packetRate: Float = 0f,
-    val receiverVersion: String = "Windows Receiver v1.2.0",
+    val receiverVersion: String = "Windows Receiver v${BuildConfig.VERSION_NAME}",
     val targetAudioDevice: String = "CABLE Input (VB-Audio Virtual Cable)"
 )
 

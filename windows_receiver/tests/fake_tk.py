@@ -17,6 +17,7 @@ PROTECTED = {"_w", "master", "children", "tk", "_name", "widgetName", "_tclComma
 _ALIASES = {"bg": "background", "fg": "foreground", "bd": "borderwidth"}
 _COMMON = {"background", "bg", "borderwidth", "bd", "cursor", "highlightbackground", "highlightcolor", "highlightthickness",
            "relief", "takefocus", "width", "height"}
+_CTK_COMMON = {"fg_color", "bg_color", "corner_radius", "border_width", "border_color", "width", "height", "cursor"}
 VALID = {
     "Frame": _COMMON | {"padx", "pady", "class", "container", "colormap", "visual"},
     "Toplevel": _COMMON | {"padx", "pady", "class", "container", "colormap", "visual", "menu", "screen", "use"},
@@ -41,6 +42,16 @@ VALID = {
     "Combobox": {"class", "cursor", "exportselection", "font", "foreground", "height", "invalidcommand", "justify",
                  "postcommand", "show", "state", "style", "takefocus", "textvariable", "validate", "validatecommand",
                  "values", "width", "xscrollcommand"},
+    "CTk": {"fg_color"},
+    "CTkToplevel": {"fg_color"},
+    "CTkFrame": _CTK_COMMON,
+    "CTkScrollableFrame": _CTK_COMMON | {"scrollbar_button_color", "scrollbar_button_hover_color"},
+    "CTkButton": _CTK_COMMON | {"text", "command", "hover_color", "text_color", "text_color_disabled", "font", "state"},
+    "CTkSwitch": _CTK_COMMON | {"text", "switch_width", "switch_height", "progress_color", "button_color",
+                                "button_hover_color", "command", "state"},
+    "CTkOptionMenu": _CTK_COMMON | {"values", "button_color", "button_hover_color", "dropdown_fg_color",
+                                    "dropdown_hover_color", "dropdown_text_color", "text_color", "text_color_disabled",
+                                    "font", "dropdown_font", "command", "state"},
 }
 _ITEM_COMMON = {"state", "tags", "dash", "dashoffset", "activedash", "disableddash"}
 ITEM_VALID = {
@@ -58,10 +69,12 @@ _ENUMS = {("line", "capstyle"): {"butt", "projecting", "round"}, ("arc", "style"
           ("text", "anchor"): {"n", "ne", "e", "se", "s", "sw", "w", "nw", "center"}}
 _COLOR_OPTS = {"background", "bg", "foreground", "fg", "highlightbackground", "highlightcolor", "insertbackground",
                "selectbackground", "selectforeground", "activebackground", "activeforeground", "disabledforeground",
-               "disabledbackground", "readonlybackground"}
+               "disabledbackground", "readonlybackground", "fg_color", "hover_color", "border_color", "text_color",
+               "text_color_disabled", "progress_color", "button_color", "button_hover_color", "dropdown_fg_color",
+               "dropdown_hover_color", "dropdown_text_color", "scrollbar_button_color", "scrollbar_button_hover_color"}
 _PACK = {"after", "anchor", "before", "expand", "fill", "side", "in", "in_", "ipadx", "ipady", "padx", "pady"}
 _GRID = {"column", "columnspan", "in", "in_", "ipadx", "ipady", "padx", "pady", "row", "rowspan", "sticky"}
-_NAMED = {"white", "black", "red", "green", "blue", "gray", "grey", "SystemButtonFace"}
+_NAMED = {"white", "black", "red", "green", "blue", "gray", "grey", "SystemButtonFace", "transparent"}
 
 
 def _check_color(opt, v, allow_empty=False):
@@ -576,6 +589,69 @@ class Combobox(Misc):
         return 0
 
 
+class _CTkBase(Misc):
+    def _draw(self, no_color_updates=False):
+        pass
+
+    def _update_dimensions_event(self, event=None):
+        self._draw(no_color_updates=True)
+
+
+class CTk(Tk):
+    def __init__(self, fg_color=None, **kw):
+        super().__init__()
+        self._opts["fg_color"] = fg_color
+
+
+class CTkToplevel(Toplevel):
+    pass
+
+
+class CTkFrame(_CTkBase):
+    pass
+
+
+class CTkScrollableFrame(_CTkBase):
+    def __init__(self, master=None, **kw):
+        super().__init__(master, **kw)
+        self._parent_canvas = Canvas(self)
+
+
+class CTkButton(_CTkBase):
+    pass
+
+
+class CTkSwitch(_CTkBase):
+    def __init__(self, master=None, **kw):
+        super().__init__(master, **kw)
+        self._switch_val = 0
+        self._draw()
+
+    def select(self):
+        self._switch_val = 1
+        self._draw()
+
+    def deselect(self):
+        self._switch_val = 0
+        self._draw()
+
+    def get(self):
+        return self._switch_val
+
+
+class CTkOptionMenu(_CTkBase):
+    def __init__(self, master=None, **kw):
+        super().__init__(master, **kw)
+        vals = kw.get("values") or []
+        self._menu_val = vals[0] if vals else ""
+
+    def get(self):
+        return self._menu_val
+
+    def set(self, v):
+        self._menu_val = v
+
+
 def install():
     tk = types.ModuleType("tkinter")
     for name in ("Tk", "Toplevel", "Frame", "Label", "Entry", "Scrollbar", "Text", "Canvas", "StringVar", "IntVar",
@@ -594,7 +670,22 @@ def install():
     mb.showerror = lambda *a, **k: None
     tk.TclError = TclError
     tk.ttk, tk.filedialog, tk.messagebox = ttk, fd, mb
-    sys.modules.update({"tkinter": tk, "tkinter.ttk": ttk, "tkinter.filedialog": fd, "tkinter.messagebox": mb})
+
+    ctk_mod = types.ModuleType("customtkinter")
+    for name in ("CTk", "CTkToplevel", "CTkFrame", "CTkScrollableFrame", "CTkButton", "CTkSwitch", "CTkOptionMenu"):
+        setattr(ctk_mod, name, globals()[name])
+    ctk_mod.set_appearance_mode = lambda mode: None
+    ctk_mod.set_default_color_theme = lambda theme: None
+    ctk_mod.set_widget_scaling = lambda scale: None
+    ctk_mod.set_window_scaling = lambda scale: None
+
+    sys.modules.update({
+        "tkinter": tk,
+        "tkinter.ttk": ttk,
+        "tkinter.filedialog": fd,
+        "tkinter.messagebox": mb,
+        "customtkinter": ctk_mod,
+    })
     return tk
 
 

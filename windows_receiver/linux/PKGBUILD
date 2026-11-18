@@ -1,0 +1,60 @@
+# Maintainer: PhoneMic Contributors
+pkgname=phonemic-receiver
+pkgver=1.3.0
+pkgrel=1
+pkgdesc="Turn your Android phone into a low-latency studio microphone over Wi-Fi or USB tethering"
+arch=('any')
+url="https://github.com/your-username/PhoneMic"
+license=('MIT')
+# Note: python-sounddevice, python-customtkinter, and python-pystray live in the AUR
+# (or build without AUR via ../setup_linux.sh which sets up a --system-site-packages venv).
+depends=(
+    'python'
+    'python-numpy'
+    'python-sounddevice'
+    'python-customtkinter'
+    'python-pillow'
+    'portaudio'
+    'tk'
+    'pipewire-pulse'
+)
+optdepends=(
+    'pipewire: low-latency audio server (recommended)'
+    'pavucontrol: graphical PulseAudio/PipeWire mixer and stream routing'
+    'qpwgraph: graphical PipeWire audio patchbay'
+    'python-pystray: system tray icon integration'
+    'ufw: simple firewall rule configuration'
+    'firewalld: firewall rule configuration'
+    'zenity: GTK error/status dialogs'
+)
+source=()
+
+package() {
+    local src_root
+    if [[ -f "$srcdir/phonemic_receiver.py" ]]; then
+        src_root="$srcdir"
+    else
+        src_root="$(cd "$startdir/.." && pwd)"
+    fi
+
+    install -dm755 "$pkgdir/usr/share/phonemic-receiver/phonemic"
+    install -dm755 "$pkgdir/usr/share/phonemic-receiver/assets"
+
+    install -m644 "$src_root/phonemic/"*.py "$pkgdir/usr/share/phonemic-receiver/phonemic/"
+    install -m755 "$src_root/phonemic_receiver.py" "$pkgdir/usr/share/phonemic-receiver/phonemic_receiver.py"
+    install -m755 "$src_root/phonemic_cli.py" "$pkgdir/usr/share/phonemic-receiver/phonemic_cli.py"
+    install -m644 "$src_root/check_dependencies.py" "$pkgdir/usr/share/phonemic-receiver/check_dependencies.py"
+    install -m644 "$src_root/requirements.txt" "$pkgdir/usr/share/phonemic-receiver/requirements.txt"
+    install -m644 "$src_root/assets/"* "$pkgdir/usr/share/phonemic-receiver/assets/"
+
+    install -Dm755 "$src_root/linux/phonemic-receiver" "$pkgdir/usr/bin/phonemic-receiver"
+    install -dm755 "$pkgdir/usr/bin"
+    ln -sf "/usr/share/phonemic-receiver/phonemic_cli.py" "$pkgdir/usr/bin/phonemic-cli"
+
+    install -Dm644 "$src_root/linux/phonemic-receiver.desktop" \
+        "$pkgdir/usr/share/applications/phonemic-receiver.desktop"
+    install -Dm644 "$src_root/assets/phonemic.png" \
+        "$pkgdir/usr/share/icons/hicolor/256x256/apps/phonemic-receiver.png"
+    install -Dm644 "$src_root/README.md" \
+        "$pkgdir/usr/share/doc/phonemic-receiver/README.md"
+}

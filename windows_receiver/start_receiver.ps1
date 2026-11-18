@@ -1,5 +1,5 @@
-# PhoneMic Windows Receiver v1.2.0 - PowerShell launcher
-$Host.UI.RawUI.WindowTitle = "PhoneMic Windows Receiver v1.2.0"
+# PhoneMic Windows Receiver v1.3.0 - PowerShell launcher
+$Host.UI.RawUI.WindowTitle = "PhoneMic Windows Receiver v1.3.0"
 
 $exe = @("PhoneMicReceiver.exe", "dist\PhoneMicReceiver.exe", "dist\PhoneMicReceiver\PhoneMicReceiver.exe") |
     ForEach-Object { Join-Path $PSScriptRoot $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -16,9 +16,9 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-python -c "import numpy, sounddevice" 2>$null
+python -c "import numpy, sounddevice, customtkinter" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[*] Installing required packages (numpy, sounddevice)..." -ForegroundColor Yellow
+    Write-Host "[*] Installing required packages (numpy, sounddevice, customtkinter)..." -ForegroundColor Yellow
     python -m pip install -r (Join-Path $PSScriptRoot "requirements.txt")
 }
 

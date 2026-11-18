@@ -30,19 +30,21 @@ Whether you're streaming on Twitch, gaming on Discord, recording a podcast with 
   * Floating draggable bubble for muting/unmuting your mic while playing mobile games or browsing.
   * Android Quick Settings tile for 1-tap connection toggle.
 
-### 💻 Windows & Cross-Platform Receivers
+### 💻 Windows & Linux Studio Receivers
 
 #### 1. Full GUI Receiver (`windows_receiver/`)
+* **Cross-Platform Desktop App**: Runs natively on **Windows 10/11** and **Linux (Arch Linux / PipeWire / PulseAudio)** with unified Obsidian Studio UI, XDG desktop launcher, autostart, and system tray support.
 * **Real-time Signal Chain**:
   * Input -> Low/High-Cut Filter -> Noise Suppression -> Noise Gate -> Auto-Gain -> Voice Changer -> 5-Band Parametric EQ -> De-Esser -> Compressor -> Output.
 * **Multi-Device Mixing**:
   * Mixes multiple connected devices simultaneously.
   * **Sum & Soft Limiter**: Sums all voices with a hyperbolic tangent (`tanh`) non-linear soft limiter to eliminate digital clipping.
   * **Auto-Duck Priority**: Detects primary active speaker and ducks other connected phones by 75% (-12 dB).
-* **Virtual Cable Integration**:
-  * Automatically routes audio into **VB-Audio Virtual Cable (WASAPI)** for zero-setup Discord/OBS selection.
-* **System Tray & Global Hotkeys**:
-  * Works in full-screen games with system-wide Push-to-Talk, Push-to-Mute, and Audio Monitoring shortcuts.
+* **Virtual Mic Routing**:
+  * **Windows**: Automatically routes audio into **VB-Audio Virtual Cable (WASAPI)** for zero-setup Discord/OBS selection.
+  * **Linux**: Automatically (or manually) creates a **PipeWire / PulseAudio** `PhoneMic_Sink` + `PhoneMic_Virtual_Mic` pair so apps immediately see a real microphone input.
+* **Tray, Sound Cues & Shortcuts**:
+  * System tray controls, isolated sound cues (via `winsound` on Windows or `pw-play`/`paplay`/`aplay` on Linux), in-app shortcuts everywhere, and Windows global push-to-talk/mute hotkeys.
 
 #### 2. Standalone CLI Receiver (`windows_receiver/phonemic_cli.py`)
 * Lightweight, single-file receiver with **zero GUI dependencies** (runs on Windows, macOS, Linux, and Raspberry Pi).
@@ -87,6 +89,20 @@ python phonemic_cli.py --mix-mode duck
 2. Double-click `start_receiver.bat` (or compile with `build_exe.bat` to generate `PhoneMicReceiver.exe`).
 3. If connecting over USB tethering for the first time, click **"Fix Firewall"** (or run `fix_firewall.bat`).
 
+#### Option C: Full Linux GUI Receiver (Arch Linux / PipeWire)
+1. Run the automated setup script (installs Arch prerequisites `python`, `portaudio`, `tk`, `pipewire-pulse`, creates `.venv`, and registers your desktop menu launcher):
+   ```bash
+   cd windows_receiver
+   ./setup_linux.sh
+   ./start_receiver.sh
+   ```
+   Or build & install the Arch package directly:
+   ```bash
+   cd windows_receiver/linux && makepkg -si
+   phonemic-receiver
+   ```
+2. If UFW or `firewalld` is active, click **Configure Firewall** in the app (or allow UDP/TCP port `5001`).
+
 ---
 
 ### 2. Connect Your Phone(s)
@@ -105,14 +121,18 @@ python phonemic_cli.py --mix-mode duck
 
 ---
 
-### 3. Route Audio to Discord, OBS, Zoom, or Games
+### 3. Route Audio to Discord, OBS, Zoom, or Browsers
 
+**Windows:**
 1. Download and install the free [VB-Audio Virtual Cable](https://vb-audio.com/Cable/).
 2. In Windows Sound Settings, verify that **CABLE Input** is set to 48000 Hz.
 3. In PhoneMic Receiver, select **CABLE Input** as your Target Device (selected by default).
-4. In Discord, OBS, Zoom, or Steam:
-   * Go to **Voice & Video Settings**.
-   * Set **Input Device (Microphone)** to: `CABLE Output (VB-Audio Virtual Cable)`.
+4. In Discord, OBS, Zoom, or Steam, set **Input Device (Microphone)** to `CABLE Output (VB-Audio Virtual Cable)`.
+
+**Linux (Arch Linux / PipeWire / PulseAudio):**
+1. Keep **Auto Virtual Mic** enabled (default), or click **Create Virtual Mic** in **Connections / Audio Devices** (or run `phonemic-receiver --create-virtual-mic`).
+2. PhoneMic routes audio to **`PhoneMic_Sink`**, exposing **`PhoneMic Virtual Mic`** to Discord, OBS, Zoom, and browsers.
+3. Optional tools: click **Sound Mixer** (`pavucontrol`) or **Patchbay** (`qpwgraph`) directly inside the receiver to inspect or customize routing.
 
 ---
 
@@ -131,7 +151,7 @@ Releases are triggered **manually on-demand** from GitHub Actions:
 1. In your GitHub repository, go to the **Actions** tab.
 2. Select **"Manual Release (APK & Windows Receiver)"** from the left sidebar.
 3. Click **"Run workflow"**.
-4. (Optional) Enter your desired release tag (e.g. `v1.2.0`) and title.
+4. (Optional) Enter your desired release tag (e.g. `v1.3.0`) and title.
 5. Click the green **"Run workflow"** button.
 6. GitHub will build both the Android APK and Windows bundle and publish them directly to your repository's **Releases** page!
 

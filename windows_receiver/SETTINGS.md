@@ -1,4 +1,4 @@
-# PhoneMic Receiver 0.11.0: settings reference
+# PhoneMic Receiver 1.3.0: settings reference
 
 Generated from the settings registry that drives the app, so it always matches what you see. Settings marked *advanced* only appear when **Settings view: Advanced** is turned on (bottom of the sidebar). You can also find any setting with the search box at the top of the window.
 
@@ -335,11 +335,20 @@ _0% to 100%, default 100%_
 Where the PC plays the phone's voice.
 
 **Audio backend**  
-The Windows audio system used for output. Auto picks the best one available, usually WASAPI, which has the lowest delay. Use DirectSound or MME only if a device you need does not appear under WASAPI.  
+The OS audio system used for output. Auto picks the lowest-latency backend available (WASAPI on Windows, PipeWire or PulseAudio on Linux). Switch only if a device you need is missing under the default backend.  
 
 
 **Output device**  
-Where the voice is sent. Pick VB-CABLE to use it as a microphone in other apps. Choose "CABLE Input" to make your phone appear as a microphone in Discord, OBS, Zoom and similar apps, where you then pick "CABLE Output" as the microphone. Choose your speakers or headphones to simply hear it yourself.  
+Where the voice is sent. Pick a virtual cable to use it as a mic. Choose VB-CABLE CABLE Input on Windows or PhoneMic Virtual Mic on Linux to feed Discord, OBS, or browsers. Pick speakers or headphones to play audio directly.  
+
+
+**Auto-create Linux virtual mic**  
+Creates a PipeWire or PulseAudio virtual mic when the receiver starts. On Linux systems running PipeWire or PulseAudio, PhoneMic creates PhoneMic_Sink and PhoneMic_Virtual_Mic automatically so Discord, OBS, and browsers can use your phone as a microphone. Turn this off if you manage sinks manually.  
+_on or off, default on_
+
+**Remove virtual mic on exit**  
+Unloads session virtual microphone modules when closing the app. Removes the PhoneMic virtual sink and source created during this session when you quit, keeping your desktop sound devices clean. Disable this if you want PhoneMic_Virtual_Mic to remain active.  
+_on or off, default on_  
 
 
 ### Delay and stability
@@ -418,12 +427,12 @@ _on or off, default on_
 
 How the app starts and behaves.
 
-**Start with Windows**  
-Opens the receiver when you sign in. The app starts minimized so it is ready when you open the phone app.  
+**Start at login**  
+Opens the receiver when you sign in to your desktop. The app starts minimized so it is ready when you open the phone app. Creates a startup entry on Windows or an autostart desktop entry on Linux.  
 _on or off_
 
 **Start minimized**  
-Opens to the taskbar instead of a window. Handy together with Start with Windows. You can still open the window from the taskbar.  
+Opens minimized instead of taking over the screen. Handy together with Start at login. You can still open the window from the taskbar or system tray.  
 _on or off, default off_
 
 **Always on top**  
@@ -479,7 +488,7 @@ Press to bring this window to the front. Handy when the app runs in the tray or 
 
 
 **Sound cues**  
-Plays a short beep when a shortcut mutes or unmutes you. The beep plays through your Windows default sound device, not through the receiver's output, so other people do not hear it. If your Windows default device is VB-CABLE, leave this off or they will.  
+Plays a short beep when a shortcut mutes or unmutes you. The beep plays through your system default speaker device, not through the receiver output, so other people do not hear it. Leave this off if a virtual cable is set as your OS default output.  
 _on or off, default off_
 
 ### Appearance
@@ -490,9 +499,13 @@ How the app looks.
 How often meters and graphs redraw. 30 frames per second looks smooth and is light on the processor. 15 saves a little more power on slow computers. The meters are not drawn while the window is minimized.  
 _one of 15 frames/s, 30 frames/s, 60 frames/s; default 30 frames/s_
 
-**Accent colour**  
-The highlight colour used across the app. Changes sliders, switches and highlights. Applies the next time the app starts.  
-_one of Teal, Blue, Violet, Amber, Rose; default Teal_
+**Accent & color preset**  
+Highlight theme or pure black-to-gray dark mode. Choose an accent color or switch to Monochrome Dark for pure black-to-gray gradients. Applies immediately across every open panel.  
+_one of Cyan, Studio Blue, Soft Indigo, Warm Amber, Soft Rose, Monochrome Dark (Black-Gray); default Cyan_
+
+**Eye-comfort soft colors**  
+Softens highlight tones to reduce glare on the eyes. Tones down vivid cyan, blue and indicator saturation across dark panels without turning the interface full grayscale. Applies immediately.  
+_on or off, default off_
 
 ### Recording
 

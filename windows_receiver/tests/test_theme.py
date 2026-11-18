@@ -17,24 +17,30 @@ def ratio(a, b):
 
 def test_text_contrast_on_every_surface():
     T = W.T
-    for fg in ("TEXT", "MUTED", "DIM", "GOOD", "WARN", "BAD"):
-        for bg in ("BG", "SURFACE", "SURFACE2", "SIDEBAR"):
-            assert ratio(getattr(T, fg), getattr(T, bg)) >= 4.5, (fg, bg, ratio(getattr(T, fg), getattr(T, bg)))
+    for soft in (False, True):
+        for preset in W.ACCENTS:
+            W.apply_accent(preset, soft=soft)
+            for fg in ("TEXT", "MUTED", "DIM", "GOOD", "WARN", "BAD", "BLUE", "BLUE_HI"):
+                for bg in ("BG", "SURFACE", "SURFACE2", "SIDEBAR"):
+                    assert ratio(getattr(T, fg), getattr(T, bg)) >= 4.5, (preset, soft, fg, bg, ratio(getattr(T, fg), getattr(T, bg)))
+    W.apply_accent("teal", soft=False)
 
 
 def test_every_accent_is_readable_and_buttons_have_readable_labels():
     T = W.T
-    saved = (T.ACCENT, T.ACCENT_HI, T.ACCENT_FG)
+    saved = (T.ACCENT, T.ACCENT_HI, T.ACCENT_FG, T.SOFT_COLORS, T.IS_MONO)
     try:
-        for name, (acc, hi, fg) in W.ACCENTS.items():
-            W.apply_accent(name)
-            for bg in ("BG", "SURFACE", "SURFACE2", "SIDEBAR"):
-                assert ratio(T.ACCENT, getattr(T, bg)) >= 4.5 and ratio(T.ACCENT_HI, getattr(T, bg)) >= 4.5, (name, bg)
-            for style, (bgc, hover, fgc) in W.FlatButton.STYLES.items():
-                assert ratio(fgc, bgc) >= 4.5, (name, style, "label on button", ratio(fgc, bgc))
-                assert ratio(fgc, hover) >= 4.0, (name, style, "label on hovered button", ratio(fgc, hover))
+        for soft in (False, True):
+            for name in W.ACCENTS:
+                W.apply_accent(name, soft=soft)
+                for bg in ("BG", "SURFACE", "SURFACE2", "SIDEBAR"):
+                    assert ratio(T.ACCENT, getattr(T, bg)) >= 4.5 and ratio(T.ACCENT_HI, getattr(T, bg)) >= 4.5, (name, soft, bg)
+                for style, (bgc, hover, fgc) in W.FlatButton.STYLES.items():
+                    assert ratio(fgc, bgc) >= 4.5, (name, soft, style, "label on button", ratio(fgc, bgc))
+                    assert ratio(fgc, hover) >= 4.0, (name, soft, style, "label on hovered button", ratio(fgc, hover))
     finally:
-        T.ACCENT, T.ACCENT_HI, T.ACCENT_FG = saved
+        W.apply_accent("teal", soft=saved[3])
+        T.ACCENT, T.ACCENT_HI, T.ACCENT_FG = saved[0], saved[1], saved[2]
         W.FlatButton.rebuild_styles()
 
 

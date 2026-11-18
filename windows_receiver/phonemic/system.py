@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import time
+import shutil
 import socket
 import tempfile
 import threading
@@ -17,7 +18,9 @@ from dataclasses import dataclass
 from .const import CABLE_HINT, MUTEX_NAME, INSTANCE_PORT
 
 IS_WIN = os.name == "nt"
+IS_LINUX = sys.platform.startswith("linux")
 FROZEN = bool(getattr(sys, "frozen", False))
+
 
 # ==============================================================================
 # PATHS
@@ -32,15 +35,63 @@ def app_dir():
 _data_dir_cache = None
 
 
+def _is_dir_writable(path):
+    try:
+        probe = os.path.join(path, f".pm_write_test_{os.getpid()}")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def _xdg_config_dir():
+    return os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+
+
+def _xdg_user_documents():
+    env_doc = os.environ.get("XDG_DOCUMENTS_DIR")
+    if env_doc:
+        return os.path.expandvars(os.path.expanduser(env_doc))
+    cfg = os.path.join(_xdg_config_dir(), "user-dirs.dirs")
+    try:
+        with open(cfg, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("XDG_DOCUMENTS_DIR="):
+                    val = s.split("=", 1)[1].strip().strip('"').strip("'")
+                    val = val.replace("$HOME", os.path.expanduser("~"))
+                    val = os.path.expandvars(os.path.expanduser(val))
+                    if os.path.isdir(val):
+                        return val
+    except OSError:
+        pass
+    return os.path.join(os.path.expanduser("~"), "Documents")
+
+
 def data_dir():
-    """Where settings live: next to the app if writable (portable), else %LOCALAPPDATA%\\PhoneMic."""
+    """Where settings live: portable next to app on Windows (or if config exists there), else %LOCALAPPDATA%\\PhoneMic or XDG config."""
     global _data_dir_cache
     if _data_dir_cache:
         return _data_dir_cache
+    override = os.environ.get("PHONEMIC_CONFIG_DIR")
+    if override:
+        os.makedirs(override, exist_ok=True)
+        _data_dir_cache = override
+        return override
     base = app_dir()
-    if not os.access(base, os.W_OK):
-        root = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
-        base = os.path.join(root, "PhoneMic")
+    if IS_WIN:
+        if not os.path.isdir(base) or not _is_dir_writable(base):
+            root = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+            base = os.path.join(root, "PhoneMic")
+            os.makedirs(base, exist_ok=True)
+    else:
+        portable_cfg = os.path.join(base, "phonemic_config.json")
+        if os.path.isfile(portable_cfg) and _is_dir_writable(base):
+            _data_dir_cache = base
+            return base
+        base = os.path.join(_xdg_config_dir(), "phonemic")
         os.makedirs(base, exist_ok=True)
     _data_dir_cache = base
     return base
@@ -55,7 +106,7 @@ def crash_log_path():
 
 
 def default_recordings_dir():
-    docs = os.path.join(os.path.expanduser("~"), "Documents")
+    docs = os.path.join(os.path.expanduser("~"), "Documents") if IS_WIN else _xdg_user_documents()
     if os.path.isdir(docs):
         return os.path.join(docs, "PhoneMic Recordings")
     return os.path.join(data_dir(), "Recordings")
@@ -118,6 +169,27 @@ def enable_dpi_awareness():
         pass
 
 
+def apply_dark_titlebar(window, dark=True):
+    """Enable dark window title bar on Windows 10 (build 18985+) and Windows 11."""
+    if not IS_WIN or window is None:
+        return
+    try:
+        import ctypes
+        window.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id()) or window.winfo_id()
+        val = ctypes.c_int(1 if dark else 0)
+        dwm = ctypes.windll.dwmapi
+        # Attribute 20 works on Windows 10 20H1 (19041+) & Win 11; attribute 19 works on older Win 10 builds
+        for attr in (20, 19):
+            try:
+                dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(val), ctypes.sizeof(val))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+
 def set_timer_resolution(ms=1, enable=True):
     """Windows' default 15.6 ms timer tick makes sleeps/waits coarse; 1 ms keeps audio threads punctual."""
     if not IS_WIN:
@@ -142,15 +214,34 @@ def boost_current_thread(level=1):
 
 
 def acquire_single_instance():
-    """Returns True if we are the only instance (keeps the mutex handle alive for process life)."""
-    if not IS_WIN:
-        return True
+    """Returns True if we are the only instance (keeps Win32 mutex or POSIX flock alive for process life)."""
+    if IS_WIN:
+        try:
+            import ctypes
+            handle = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
+            already = ctypes.windll.kernel32.GetLastError() == 183   # ERROR_ALREADY_EXISTS
+            acquire_single_instance._handle = handle                  # keep reference
+            return not already
+        except Exception:
+            return True
     try:
-        import ctypes
-        handle = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
-        already = ctypes.windll.kernel32.GetLastError() == 183   # ERROR_ALREADY_EXISTS
-        acquire_single_instance._handle = handle                  # keep reference
-        return not already
+        import fcntl
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+        if runtime_dir and os.path.isdir(runtime_dir):
+            lock_path = os.path.join(runtime_dir, "phonemic-receiver.lock")
+        else:
+            uid = os.getuid() if hasattr(os, "getuid") else 0
+            lock_path = os.path.join(tempfile.gettempdir(), f"phonemic-receiver-{uid}.lock")
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode("ascii"))
+        acquire_single_instance._fd = fd
+        return True
     except Exception:
         return True
 
@@ -213,16 +304,66 @@ def is_admin():
 
 
 # ==============================================================================
-# WINDOWS FIREWALL
+# FIREWALL (Windows Defender & Linux ufw/firewalld)
 # ==============================================================================
 def firewall_rule_names(port):
     return [f"PhoneMic Receiver (UDP {port})", f"PhoneMic Receiver (TCP {port})"]
 
 
+def firewall_summary(port):
+    """Return `(ok_or_none, short_label, detail_text)` for the current OS."""
+    if IS_WIN:
+        ok = firewall_rules_ok(port)
+        if ok:
+            return True, "Rules present", f"Windows Firewall allows UDP/TCP port {port}."
+        return False, "Rules missing", "Rules for USB/LAN streaming are missing."
+    if not IS_LINUX:
+        return True, "Open", "Host firewall check not required."
+
+    # Check firewalld (common on Fedora/Arch optional)
+    if shutil.which("firewall-cmd"):
+        st = run_silent(["systemctl", "is-active", "--quiet", "firewalld"], timeout=2.0)
+        if st is not None and st.returncode == 0:
+            u = run_silent(["firewall-cmd", f"--query-port={port}/udp"], timeout=2.0)
+            t = run_silent(["firewall-cmd", f"--query-port={port}/tcp"], timeout=2.0)
+            if u and t and u.returncode == 0 and t.returncode == 0:
+                return True, "firewalld allowed", f"Ports {port}/udp and {port}/tcp are open in firewalld."
+            return (
+                False,
+                "firewalld missing rule",
+                f"Run: sudo firewall-cmd --add-port={port}/udp --add-port={port}/tcp --permanent && sudo firewall-cmd --reload",
+            )
+
+    # Check ufw (common on Arch)
+    if shutil.which("ufw"):
+        st = run_silent(["systemctl", "is-active", "--quiet", "ufw"], timeout=2.0)
+        if st is not None and st.returncode == 0:
+            p = run_silent(["ufw", "status"], timeout=2.0)
+            out = (p.stdout or "") if p else ""
+            if p and p.returncode == 0 and "inactive" not in out.lower():
+                has_udp = f"{port}/udp" in out or (f"{port} " in out and "ALLOW" in out)
+                has_tcp = f"{port}/tcp" in out or (f"{port} " in out and "ALLOW" in out)
+                if has_udp and has_tcp:
+                    return True, "UFW allowed", f"Ports {port}/udp and {port}/tcp are allowed in UFW."
+                return (
+                    False,
+                    "UFW missing rule",
+                    f"Run: sudo ufw allow {port}/udp && sudo ufw allow {port}/tcp",
+                )
+            return (
+                None,
+                "UFW active (check rules)",
+                f"If phone cannot connect, run: sudo ufw allow {port}/udp && sudo ufw allow {port}/tcp",
+            )
+
+    return True, "No blocking firewall", f"No active ufw/firewalld blocking port {port}."
+
+
 def firewall_rules_ok(port):
-    """True when both inbound rules exist. (Return code is locale independent.)"""
+    """True when inbound rules exist or no host firewall is blocking the port."""
     if not IS_WIN:
-        return True
+        ok, _, _ = firewall_summary(port)
+        return ok is not False
     for name in firewall_rule_names(port):
         p = run_silent(["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"], timeout=4.0)
         if not p or p.returncode != 0 or "PhoneMic" not in (p.stdout or ""):
@@ -245,8 +386,30 @@ def _firewall_commands(port):
 
 
 def configure_firewall(port):
-    """Create the inbound rules. Asks for UAC elevation when needed.
+    """Create the inbound rules. Asks for UAC/pkexec elevation when needed.
     Returns (launched: bool, message). Caller should re-check with firewall_rules_ok() afterwards."""
+    if IS_LINUX:
+        ok, _short, detail = firewall_summary(port)
+        if ok is True:
+            return True, detail
+        pkexec = shutil.which("pkexec")
+        cmd = None
+        if shutil.which("firewall-cmd"):
+            st = run_silent(["systemctl", "is-active", "--quiet", "firewalld"], timeout=2.0)
+            if st is not None and st.returncode == 0:
+                cmd = f"firewall-cmd --add-port={int(port)}/udp --add-port={int(port)}/tcp --permanent && firewall-cmd --reload"
+        if cmd is None and shutil.which("ufw"):
+            st = run_silent(["systemctl", "is-active", "--quiet", "ufw"], timeout=2.0)
+            if st is not None and st.returncode == 0:
+                cmd = f"ufw allow {int(port)}/udp && ufw allow {int(port)}/tcp"
+        if cmd is None:
+            return True, "No active Linux firewall needed configuration."
+        if pkexec:
+            p = subprocess.run([pkexec, "sh", "-c", cmd], capture_output=True, text=True)
+            if p.returncode == 0:
+                return True, f"Firewall rules applied for port {port}."
+            return False, (p.stderr or "Authorization cancelled.").strip()
+        return False, detail
     if not IS_WIN:
         return True, "Not on Windows - nothing to do."
     bat = os.path.join(tempfile.gettempdir(), "phonemic_firewall.bat")
@@ -284,31 +447,37 @@ class NetIface:
 
 
 _VIRTUAL_KEYS = ("virtual", "vbox", "virtualbox", "vmware", "vethernet", "wsl", "hyper-v", "loopback",
-                 "docker", "tap-", "tailscale", "zerotier", "bluetooth", "npcap", "pseudo")
+                 "docker", "tap-", "tailscale", "zerotier", "bluetooth", "npcap", "pseudo",
+                 "virbr", "veth", "waydroid", "incusbr", "lxdbr", "tun", "tap", "wg")
 _USB_KEYS = ("rndis", "remote ndis", "tether", "android", "samsung", "pixel", "poco", "xiaomi", "oneplus",
              "usb ethernet", "usb network", "usb to ethernet", "cdc ethernet", "ncm", "mobile broadband")
-_WIFI_KEYS = ("wi-fi", "wifi", "wlan", "wireless", "drahtlos", "802.11", "wi\u2011fi", "sans fil", "inal\u00e1mbrica")
+_WIFI_KEYS = ("wi-fi", "wifi", "wlan", "wireless", "drahtlos", "802.11", "wi\u2011fi", "sans fil", "inal\u00e1mbrica", "wlp", "wlx")
 _CATEGORY_ORDER = {"Wi-Fi": 0, "Ethernet": 1, "Network": 2, "USB Tether": 3, "PC Hotspot": 4, "Virtual": 5}
+_LINUX_USB_NAME_RE = re.compile(r"^(?:usb\d+|rndis\d+|enp\d+s\d+.*u\d+|enx[0-9a-f]+)$")
+_LINUX_ETH_NAME_RE = re.compile(r"^(?:eth\d+|en[ops]\w+)$")
+_LINUX_VIRT_NAME_RE = re.compile(r"^(?:br-[0-9a-f]+|virbr\d*|docker\d*|veth\w+|vboxnet\d*|vmnet\d+|tun\d*|tap\d*|wg\d*|tailscale\d*|zt\w+|waydroid\d*|incusbr\d*|lxdbr\d*|lo)$")
 
 
 def classify_interface(adapter_name, description, ip):
     """Pure function (unit-tested). Names are matched case-insensitively across locales."""
+    adapter_low = (adapter_name or "").strip().lower()
     text = f"{adapter_name} {description}".lower()
     if ip.startswith("192.168.137."):
         return "PC Hotspot"
-    if any(k in text for k in _USB_KEYS) or ip.startswith("192.168.42."):
-        return "USB Tether"
-    if any(k in text for k in _VIRTUAL_KEYS) or ip.startswith(("192.168.56.", "172.17.")):
+    if _LINUX_VIRT_NAME_RE.match(adapter_low) or any(k in text for k in _VIRTUAL_KEYS) or ip.startswith(("192.168.56.", "172.17.")):
         return "Virtual"
-    if any(k in text for k in _WIFI_KEYS):
+    if _LINUX_USB_NAME_RE.match(adapter_low) or any(k in text for k in _USB_KEYS) or ip.startswith("192.168.42."):
+        return "USB Tether"
+    if adapter_low.startswith(("wlan", "wlp", "wlx")) or any(k in text for k in _WIFI_KEYS):
         return "Wi-Fi"
-    if "ethernet" in text or "lan" in text or "gbe" in text or "realtek" in text or "intel" in text:
+    if _LINUX_ETH_NAME_RE.match(adapter_low) or "ethernet" in text or "lan" in text or "gbe" in text or "realtek" in text or "intel" in text:
         return "Ethernet"
     return "Network"
 
 
 _IPV4_RE = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})")
 _DESC_RE = re.compile(r"^\s*(description|beschreibung|descripci[o\u00f3]n|descrizione|beschrijving|opis)\b", re.I)
+_IP_ADDR_LINE_RE = re.compile(r"^\d+:\s+([^\s:@]+)(?:@[^\s:]+)?\s+inet\s+(\d{1,3}(?:\.\d{1,3}){3})/\d+")
 
 
 def parse_ipconfig(text):
@@ -338,6 +507,21 @@ def parse_ipconfig(text):
     return result
 
 
+def parse_ip_addr(text):
+    """Parse Linux `ip -o -4 addr show` output into NetIface entries."""
+    result, seen = [], set()
+    for raw in (text or "").splitlines():
+        m = _IP_ADDR_LINE_RE.match(raw.strip())
+        if not m:
+            continue
+        iface, ip = m.group(1), m.group(2)
+        if iface == "lo" or ip.startswith(("127.", "169.254.", "0.")) or ip in seen:
+            continue
+        seen.add(ip)
+        result.append(NetIface(classify_interface(iface, "", ip), ip, iface))
+    return result
+
+
 def _socket_interfaces():
     """No-subprocess fallback: hostname addresses + the outbound interface."""
     found, seen = [], set()
@@ -363,7 +547,7 @@ def _socket_interfaces():
 
 
 class NetworkInfo:
-    """Cached, thread-safe view of this PC's IPv4 interfaces (ipconfig is slow: never call it per packet)."""
+    """Cached, thread-safe view of this PC's IPv4 interfaces (ipconfig/ip are run off the GUI thread)."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -377,6 +561,10 @@ class NetworkInfo:
             p = run_silent(["ipconfig", "/all"], timeout=5.0)
             if p and p.returncode == 0:
                 found = parse_ipconfig(p.stdout)
+        elif IS_LINUX:
+            p = run_silent(["ip", "-o", "-4", "addr", "show"], timeout=3.0)
+            if p and p.returncode == 0:
+                found = parse_ip_addr(p.stdout)
         known = {i.ip for i in found}
         for i in _socket_interfaces():          # always merge, covers parse failures
             if i.ip not in known:
@@ -452,24 +640,42 @@ class NetworkInfo:
 
 
 # ==============================================================================
-# START WITH WINDOWS
+# AUTOSTART (Windows Registry / Linux XDG Autostart)
 # ==============================================================================
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _RUN_VALUE = "PhoneMicReceiver"
 
 
+def _linux_autostart_path():
+    return os.path.join(_xdg_config_dir(), "autostart", "phonemic-receiver.desktop")
+
+
 def startup_command():
     if FROZEN:
         return f'"{sys.executable}" --minimized'
-    exe = sys.executable
-    pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
-    if os.path.exists(pyw):
-        exe = pyw
+    if IS_WIN:
+        exe = sys.executable
+        pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+        if os.path.exists(pyw):
+            exe = pyw
+        script = os.path.join(app_dir(), "phonemic_receiver.py")
+        return f'"{exe}" "{script}" --minimized'
+    if IS_LINUX and os.path.isfile("/usr/bin/phonemic-receiver") and app_dir().startswith("/usr/"):
+        return "/usr/bin/phonemic-receiver --minimized"
     script = os.path.join(app_dir(), "phonemic_receiver.py")
-    return f'"{exe}" "{script}" --minimized'
+    return f'"{sys.executable}" "{script}" --minimized'
 
 
 def get_startup_enabled():
+    if IS_LINUX:
+        path = _linux_autostart_path()
+        if not os.path.isfile(path):
+            return False
+        try:
+            txt = open(path, "r", encoding="utf-8", errors="replace").read()
+            return "Hidden=true" not in txt
+        except OSError:
+            return False
     if not IS_WIN:
         return False
     try:
@@ -482,6 +688,32 @@ def get_startup_enabled():
 
 
 def set_startup_enabled(enabled):
+    if IS_LINUX:
+        path = _linux_autostart_path()
+        try:
+            if enabled:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                content = (
+                    "[Desktop Entry]\n"
+                    "Type=Application\n"
+                    "Name=PhoneMic Receiver\n"
+                    "Comment=Use your phone as a low-latency studio microphone\n"
+                    f"Exec={startup_command()}\n"
+                    "Icon=phonemic-receiver\n"
+                    "Terminal=false\n"
+                    "Categories=AudioVideo;Audio;\n"
+                    "X-GNOME-Autostart-enabled=true\n"
+                )
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            else:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+            return True
+        except Exception:
+            return False
     if not IS_WIN:
         return False
     try:
@@ -510,23 +742,88 @@ class AudioDevice:
     channels: int
     default_sr: float
     is_default: bool = False
+    sink_name: str = ""
 
     @property
     def is_cable(self):
-        return CABLE_HINT.lower() in self.name.lower()
+        n = (self.name or "").lower()
+        s = (self.sink_name or "").lower()
+        return (
+            CABLE_HINT.lower() in n
+            or "phonemic_sink" in s
+            or "phonemic virtual mic" in n
+            or "phonemic_virtual_mic" in n
+        )
 
 
 def _api_rank(api):
     a = (api or "").lower()
-    if "wasapi" in a:
+    if IS_WIN:
+        if "wasapi" in a:
+            return 0
+        if "directsound" in a:
+            return 1
+        if "mme" in a:
+            return 2
+        if "wdm" in a:
+            return 3
+        return 4
+    if "pipewire" in a:
         return 0
-    if "directsound" in a:
+    if "pulse" in a:
         return 1
-    if "mme" in a:
+    if "jack" in a:
         return 2
-    if "wdm" in a:
+    if "alsa" in a:
         return 3
     return 4
+
+
+def _linux_virtual_and_pulse_devices(raw_devs):
+    """Expose PipeWire / PulseAudio sinks via the PortAudio ALSA bridge on Linux."""
+    if not IS_LINUX:
+        return []
+    bridge = None
+    for preferred in ("pipewire", "pulse", "default"):
+        bridge = next(
+            (d for d in raw_devs if d.name.strip().lower() == preferred and ("alsa" in d.api.lower() or "pipewire" in d.api.lower() or "pulse" in d.api.lower())),
+            None,
+        )
+        if bridge is not None:
+            break
+    if bridge is None:
+        return []
+    from . import virtual_mic
+    if not virtual_mic.pactl_available():
+        return []
+    backend, _ = virtual_mic.server_info()
+    if not backend:
+        return []
+    sinks = virtual_mic.list_sinks()
+    if not sinks:
+        return []
+    out = []
+    # Put PhoneMic_Sink first when present so pick_default_output & UI highlight it cleanly
+    ordered = sorted(sinks, key=lambda s: (0 if s.name == virtual_mic.SINK_NAME else (1 if s.is_default else 2), s.description.lower()))
+    for s in ordered:
+        if s.name == virtual_mic.SINK_NAME:
+            label = f"{virtual_mic.FRIENDLY_DEVICE_LABEL}"
+            is_def = False
+        else:
+            label = f"{s.description} [{backend}]"
+            is_def = s.is_default
+        out.append(
+            AudioDevice(
+                index=bridge.index,
+                name=label,
+                api=backend,
+                channels=max(2, bridge.channels),
+                default_sr=bridge.default_sr,
+                is_default=is_def,
+                sink_name=s.name,
+            )
+        )
+    return out
 
 
 def list_output_devices(sd):
@@ -551,6 +848,10 @@ def list_output_devices(sd):
         out.append(AudioDevice(idx, d.get("name", f"Device {idx}"), api.get("name", "?"),
                                int(d.get("max_output_channels", 2)), float(d.get("default_samplerate", 48000)),
                                api.get("default_output_device", -1) == idx))
+    if IS_LINUX:
+        pulse_devs = _linux_virtual_and_pulse_devices(out)
+        if pulse_devs:
+            return pulse_devs + out
     return out
 
 
@@ -559,7 +860,7 @@ def available_apis(devs):
 
 
 def resolve_api(devs, pref):
-    """pref: 'auto' or a substring such as 'WASAPI'. Returns the concrete host API name to use."""
+    """pref: 'auto' or a substring such as 'WASAPI' / 'PipeWire'. Returns the concrete host API name to use."""
     apis = available_apis(devs)
     if not apis:
         return ""

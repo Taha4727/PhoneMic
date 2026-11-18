@@ -27,6 +27,8 @@ Usage:
   python phonemic_cli.py [--port 5001] [--device "CABLE Input"] [--monitor-device "Headphones"] [--mix-mode sum]
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import socket
@@ -36,19 +38,22 @@ import threading
 import time
 from collections import deque
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 DEFAULT_PORT = 5001
 DISCOVERY_PROBE = b"PM_DISCOVER"
 DISCOVERY_REPLY = b"PMA1"
 FRAME_48K = 480       # 10 ms at 48 kHz
 FRAME_24K = 240       # 10 ms at 24 kHz
 FRAME_16K = 160       # 10 ms at 16 kHz
+MASK32 = 0xFFFFFFFF
+SIO_UDP_CONNRESET = 0x9800000C
 
 try:
     import numpy as np
-except ImportError:
-    print("Error: numpy is required for audio processing. Please run: pip install numpy", file=sys.stderr)
-    sys.exit(1)
+    _NP_ERR = ""
+except ImportError as _e:
+    np = None
+    _NP_ERR = str(_e)
 
 try:
     import sounddevice as sd
@@ -57,6 +62,21 @@ except Exception as e:
     _SD_ERR = str(e)
 else:
     _SD_ERR = ""
+
+
+def enable_ansi():
+    """Turn on ANSI colour escapes in Windows 10+ consoles."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if k32.GetConsoleMode(h, ctypes.byref(mode)):
+            k32.SetConsoleMode(h, mode.value | 0x0004)
+    except Exception:
+        pass
 
 
 # -----------------------------------------------------------------------------
@@ -121,6 +141,8 @@ class KeyPoller:
 def upsample_2x(x: np.ndarray) -> np.ndarray:
     """Upsample 24 kHz float32 samples to 48 kHz using linear interpolation."""
     n = len(x)
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
     out = np.empty(n * 2, dtype=np.float32)
     out[0::2] = x
     x_next = np.append(x[1:], x[-1])
@@ -131,6 +153,8 @@ def upsample_2x(x: np.ndarray) -> np.ndarray:
 def upsample_3x(x: np.ndarray) -> np.ndarray:
     """Upsample 16 kHz float32 samples to 48 kHz using linear interpolation."""
     n = len(x)
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
     out = np.empty(n * 3, dtype=np.float32)
     x_next = np.append(x[1:], x[-1])
     out[0::3] = x
@@ -174,10 +198,10 @@ class ClientStream:
         self.rate_bytes += nbytes
         self.sample_rate = sample_rate
 
-        # Sequence gap check
+        # Sequence gap check (uint32 sequence numbers)
         if seq >= 0 and self.last_seq >= 0:
-            diff = (seq - self.last_seq) & 0xFFFF
-            if diff > 1 and diff < 1000:
+            diff = (seq - self.last_seq) & MASK32
+            if 1 < diff < 1000:
                 self.lost_packets += (diff - 1)
         if seq >= 0:
             self.last_seq = seq
@@ -203,7 +227,10 @@ class ClientStream:
             return np.zeros(FRAME_48K, dtype=np.float32)
 
         pcm = self.queue.popleft()
-        raw = np.frombuffer(pcm, dtype="<i2").astype(np.float32) * (1.0 / 32768.0)
+        even_len = len(pcm) & ~1
+        if even_len < 2:
+            return np.zeros(FRAME_48K, dtype=np.float32)
+        raw = np.frombuffer(pcm[:even_len], dtype="<i2").astype(np.float32) * (1.0 / 32768.0)
 
         # Upsample to 48k master clock if sender is 24k or 16k
         if self.sample_rate == 24000:
@@ -407,72 +434,114 @@ class CliReceiver:
     def _udp_loop(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        except Exception:
+            pass
+        if os.name == "nt":
+            try:
+                sock.ioctl(SIO_UDP_CONNRESET, False)
+            except Exception:
+                pass
+        try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
         except Exception:
             pass
         try:
             sock.bind(("0.0.0.0", self.port))
+            sock.settimeout(0.5)
         except Exception as e:
             print(f"\n[Error] Cannot bind UDP port {self.port}: {e}", file=sys.stderr)
             self.running = False
+            try:
+                sock.close()
+            except Exception:
+                pass
             return
 
         buf = bytearray(4096)
-        while self.running:
-            try:
-                n, addr = sock.recvfrom_into(buf)
-            except Exception:
-                continue
-
-            if n < 4:
-                continue
-
-            # Auto-discovery probe
-            if buf[:4] == b"PMD0" or DISCOVERY_PROBE in buf[:min(n, 32)]:
-                # Resolve real local interface IP for sender's subnet
-                local_ip = "127.0.0.1"
+        try:
+            while self.running:
                 try:
-                    s_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    s_probe.connect((addr[0], addr[1] if addr[1] > 0 else 5001))
-                    local_ip = s_probe.getsockname()[0]
-                    s_probe.close()
+                    n, addr = sock.recvfrom_into(buf)
+                except socket.timeout:
+                    continue
                 except Exception:
-                    try:
-                        local_ip = socket.gethostbyname(socket.gethostname())
-                    except Exception:
-                        pass
-                sock.sendto(DISCOVERY_REPLY + f" {VERSION} {local_ip}".encode("ascii"), addr)
-                continue
+                    continue
 
-            # Packet headers:
-            # PM01 -> 48 kHz 16-bit
-            # PM02 -> 24 kHz 16-bit
-            # PM03 -> 16 kHz 16-bit
-            magic = bytes(buf[:4])
-            if magic in (b"PM01", b"PM02", b"PM03") and n >= 8:
-                sr = 48000 if magic == b"PM01" else (24000 if magic == b"PM02" else 16000)
-                seq = struct.unpack_from(">I", buf, 4)[0]
-                pcm = bytes(buf[8:n])
-                self._on_client_packet(addr, pcm, sr, seq)
-            elif n >= 320 and n % 2 == 0:
-                # Raw PCM fallback
-                self._on_client_packet(addr, bytes(buf[:n]), 48000, -1)
+                if n < 4:
+                    continue
+
+                head = bytes(buf[:min(n, 32)])
+                # Auto-discovery probe
+                if head.startswith((b"PMD", DISCOVERY_PROBE)) or b"PMD0" in head or DISCOVERY_PROBE in head:
+                    # Resolve real local interface IP for sender's subnet
+                    local_ip = "127.0.0.1"
+                    try:
+                        s_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        s_probe.connect((addr[0], addr[1] if addr[1] > 0 else self.port))
+                        local_ip = s_probe.getsockname()[0]
+                        s_probe.close()
+                    except Exception:
+                        try:
+                            local_ip = socket.gethostbyname(socket.gethostname())
+                        except Exception:
+                            pass
+                    try:
+                        sock.sendto(DISCOVERY_REPLY + f" {VERSION} {local_ip}".encode("ascii"), addr)
+                    except OSError:
+                        pass
+                    continue
+
+                # Packet headers:
+                # PM01 -> 48 kHz 16-bit
+                # PM02 -> 24 kHz 16-bit
+                # PM03 -> 16 kHz 16-bit
+                magic = bytes(buf[:4])
+                if magic in (b"PM01", b"PM02", b"PM03") and n >= 8:
+                    sr = 48000 if magic == b"PM01" else (24000 if magic == b"PM02" else 16000)
+                    seq = struct.unpack_from(">I", buf, 4)[0]
+                    pcm_len = (n - 8) & ~1
+                    if pcm_len >= 2:
+                        pcm = bytes(buf[8:8 + pcm_len])
+                        self._on_client_packet(addr, pcm, sr, seq)
+                elif n >= 320 and n % 2 == 0:
+                    # Raw PCM fallback
+                    self._on_client_packet(addr, bytes(buf[:n]), 48000, -1)
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
 
     # -- TCP Network Loop ------------------------------------------------------
     def _tcp_loop(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        except Exception:
+            pass
+        try:
             server.bind(("0.0.0.0", self.port))
             server.listen(4)
+            server.settimeout(0.5)
         except Exception as e:
             print(f"\n[Error] Cannot bind TCP port {self.port}: {e}", file=sys.stderr)
             self.running = False
+            try:
+                server.close()
+            except Exception:
+                pass
             return
 
         active_tcp_clients = []
-        while self.running:
-            try:
-                conn, addr = server.accept()
+        try:
+            while self.running:
+                try:
+                    conn, addr = server.accept()
+                except socket.timeout:
+                    continue
+                except Exception:
+                    break
                 # Cap concurrent TCP connections to 8
                 active_tcp_clients = [t for t in active_tcp_clients if t.is_alive()]
                 if len(active_tcp_clients) >= 8:
@@ -481,8 +550,11 @@ class CliReceiver:
                 t = threading.Thread(target=self._handle_tcp_client, args=(conn, addr), daemon=True)
                 active_tcp_clients.append(t)
                 t.start()
+        finally:
+            try:
+                server.close()
             except Exception:
-                break
+                pass
 
     def _handle_tcp_client(self, conn, addr):
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -582,6 +654,7 @@ class CliReceiver:
         meter_len = 24
         status_msg = ""
         status_until = 0.0
+        enable_ansi()
 
         with KeyPoller() as poller:
             try:
@@ -715,26 +788,45 @@ class CliReceiver:
                 print("[*] Goodbye!")
 
 
+def valid_port(val):
+    try:
+        p = int(val)
+        if 1 <= p <= 65535:
+            return p
+    except Exception:
+        pass
+    raise argparse.ArgumentTypeError(f"Invalid port: '{val}'. Must be between 1 and 65535.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="PhoneMic Standalone CLI Receiver")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port to listen on (default 5001)")
+    parser.add_argument("--port", type=valid_port, default=DEFAULT_PORT, help="Port to listen on (1-65535, default 5001)")
     parser.add_argument("--mix-mode", choices=["sum", "duck"], default="sum", help="Multi-device mix mode: 'sum' (soft limiter) or 'duck' (auto-duck)")
     parser.add_argument("--device", type=str, default=None, help="Name of main sound output device (e.g. 'CABLE Input')")
     parser.add_argument("--monitor-device", type=str, default=None, help="Name of monitor headphone device")
     parser.add_argument("--monitor", action="store_true", help="Start with audio monitoring enabled immediately")
     parser.add_argument("--tcp", action="store_true", help="Use TCP transport instead of UDP")
     parser.add_argument("--list-devices", action="store_true", help="List audio output devices and exit")
+    parser.add_argument("-V", "--version", action="store_true", help="Print version and exit")
     args = parser.parse_args()
+
+    if args.version:
+        print(f"PhoneMic CLI Receiver {VERSION}")
+        return 0
 
     if args.list_devices:
         if sd is None:
             print(f"sounddevice error: {_SD_ERR}")
-            return
+            return 1
         print("Available output devices:")
         for idx, dev in enumerate(sd.query_devices()):
             if dev["max_output_channels"] > 0:
                 print(f"  [{idx:2d}] {dev['name']} ({dev['max_output_channels']} ch)")
-        return
+        return 0
+
+    if np is None:
+        print("Error: numpy is required for audio processing. Please run: pip install numpy", file=sys.stderr)
+        return 1
 
     rx = CliReceiver(
         port=args.port,
@@ -747,7 +839,8 @@ def main():
         rx.monitoring = True
 
     rx.start()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

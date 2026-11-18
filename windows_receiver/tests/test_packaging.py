@@ -50,6 +50,8 @@ def test_build_scripts_chain_together():
         txt = read(f)
         assert VERSION in txt, f"{f} does not show the current version"
         assert not re.search(r"v0\.(9|10)\.\d", txt), f"{f} still mentions an old version"
+    cli_ver = re.search(r'^VERSION\s*=\s*"([^"]+)"', read("phonemic_cli.py"), re.M).group(1)
+    assert cli_ver == VERSION, f"phonemic_cli.py VERSION ({cli_ver}) != {VERSION}"
 
 
 def test_batch_files_never_expand_paths_inside_parenthesised_blocks():

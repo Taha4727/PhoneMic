@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for PhoneMic Windows Receiver v1.2.0
+PyInstaller spec for PhoneMic Windows Receiver v1.3.0
 
     pyinstaller --clean PhoneMicReceiver.spec                 -> dist\PhoneMicReceiver.exe        (single file, portable)
     set PM_ONEDIR=1 && pyinstaller --clean PhoneMicReceiver.spec
@@ -14,18 +14,18 @@ ICON = os.path.join("assets", "phonemic.ico")
 
 datas, binaries = [], []
 hiddenimports = [
-    "sounddevice", "_sounddevice_data", "numpy", "pystray", "pystray._win32", "PIL", "PIL.Image", "PIL.ImageDraw", "winsound",
+    "customtkinter", "sounddevice", "_sounddevice_data", "numpy", "pystray", "pystray._win32", "PIL", "PIL.Image", "PIL.ImageDraw", "winsound",
     "tkinter", "tkinter.ttk", "tkinter.messagebox", "tkinter.filedialog", "_tkinter",
     "winreg", "wave", "webbrowser",
     # the application package (listed explicitly so the lazy imports in gui/launcher are always bundled)
     "phonemic", "phonemic.const", "phonemic.config", "phonemic.system", "phonemic.dsp", "phonemic.engine",
     "phonemic.widgets", "phonemic.ui_kit", "phonemic.gui", "phonemic.minimal_gui", "phonemic.pages", "phonemic.wizard", "phonemic.cli", "phonemic.icon",
     "phonemic.bindings", "phonemic.settings_meta", "phonemic.presets_io", "phonemic.hotkeys", "phonemic.tray", "phonemic.cues",
-    "phonemic.selftest", "phonemic.qr", "phonemic.qrcodegen",
+    "phonemic.virtual_mic", "phonemic.selftest", "phonemic.qr", "phonemic.qrcodegen",
 ]
 
-# PortAudio DLL + sounddevice package data
-for pkg in ("sounddevice", "_sounddevice_data", "pystray"):
+# PortAudio DLL + sounddevice package data + CustomTkinter themes
+for pkg in ("customtkinter", "sounddevice", "_sounddevice_data", "pystray"):
     try:
         d, b, h = collect_all(pkg)
         datas += d

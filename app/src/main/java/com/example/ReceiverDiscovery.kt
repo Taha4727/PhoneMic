@@ -147,7 +147,7 @@ object ReceiverDiscovery {
                             val sender = responsePacket.address
                             if (sender is Inet4Address) {
                                 val host = sender.hostAddress ?: ""
-                                // Extract embedded IP in reply if provided: "PMA1 0.6.5 192.168.42.129"
+                                // Extract embedded IP in reply if provided: "PMA1 1.3.0 192.168.42.129"
                                 val parts = text.split(" ")
                                 val candidateIp = if (parts.size >= 3 && parts[2].matches(Regex("^(\\d{1,3}\\.){3}\\d{1,3}$"))) {
                                     parts[2]
