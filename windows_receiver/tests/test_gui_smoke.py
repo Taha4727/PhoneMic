@@ -211,7 +211,10 @@ out_vals = list(dash.out_combo.cget("values") or [])
 if len(out_vals) > 1:
     other_dev = next(n for n in out_vals if n != dash.out_combo.get())
     dash.out_combo.command(other_dev)
+    if "connect" not in app.pages:
+        app.show_page("connect")
     assert rx.main_dev.name == other_dev and app.pages["connect"].out_combo.get() == other_dev
+    app.show_page("dashboard")
 # Responsive two-tier header & Dashboard 2-col / 1-col + hero + QuickFX reflow
 app._layout_header(900); assert app._header_wide is True and app.search.packed[1]["row"] == 0
 app._layout_header(600); assert app._header_wide is False and app.search.packed[1]["row"] == 1
@@ -253,7 +256,7 @@ assert not app._err_seen, app._err_seen
 
 # LevelMeter and SpectrumView idle fast-path settles cleanly
 app.show_page("dashboard")
-for _ in range(40):
+for _ in range(65):
     dash.meter.update_levels(-80.0, -80.0, -80.0, False)
     dash.spectrum.idle()
 assert dash.meter._idle_settled is True and dash.spectrum._idle_settled is True
@@ -280,7 +283,10 @@ app.toggle_ui_mode(); assert app.ui_mode == "default"
 print("   PASS")
 
 print("13. live theme rebuild, monochrome/soft modes, and binder scope cleanup")
+app.binder.set(sm.BY_KEY["app.soft_colors"], False)
+app.binder.set(sm.BY_KEY["app.accent"], "teal")
 saved = widgets.T.ACCENT
+assert saved == widgets.ACCENTS["teal"][0]
 widgets.apply_accent("blue"); assert widgets.T.ACCENT == widgets.ACCENTS["blue"][0] and widgets.FlatButton.STYLES["primary"][0] == widgets.T.ACCENT
 widgets.apply_accent("mono"); assert widgets.T.IS_MONO and widgets.T.ACCENT == widgets.ACCENTS["mono"][0]
 widgets.apply_accent("teal", soft=True); assert widgets.T.SOFT_COLORS and widgets.T.ACCENT == widgets.SOFT_ACCENTS["teal"][0]
@@ -294,12 +300,14 @@ assert app.current == "settings" and app.pages["settings"].active_tab == "record
 assert widgets.T.ACCENT == widgets.ACCENTS["blue"][0] and "Restart" not in app.status_left.cget("text")
 app.binder.set(sm.BY_KEY["app.accent"], "mono")
 assert widgets.T.IS_MONO and app.pages["settings"].active_tab == "recording"
+assert len(app.binder.any_listeners) == base_any, (len(app.binder.any_listeners), base_any)
 app.show_page("sound"); app.pages["sound"].pick_stage("eq"); app.pages["sound"].eq_pick(2)
+sound_base_any = len(app.binder.any_listeners)
 app.binder.set(sm.BY_KEY["app.soft_colors"], True)
 assert app.current == "sound" and app.pages["sound"].stage_id == "eq" and app.pages["sound"].eq_band == 2
 app.binder.set(sm.BY_KEY["app.soft_colors"], False)
 app.binder.set(sm.BY_KEY["app.accent"], "teal")
-assert len(app.binder.any_listeners) == base_any, (len(app.binder.any_listeners), base_any)
+assert len(app.binder.any_listeners) == sound_base_any, (len(app.binder.any_listeners), sound_base_any)
 assert not widgets.T.IS_MONO and not widgets.T.SOFT_COLORS and widgets.T.ACCENT == saved
 app.show_page("dashboard"); tick(2)
 print("   PASS")

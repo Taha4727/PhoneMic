@@ -350,6 +350,8 @@ class App:
         want = bool(self.cfg.data["app"]["tray_icon"]) and self.tray.available
         if want and not self.tray.running:
             self.tray.start(self.rx.state())
+            self._hdr_cache = None
+            self.refresh_header()
         elif not want and self.tray.running:
             self.tray.stop()
 

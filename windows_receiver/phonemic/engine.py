@@ -24,6 +24,7 @@ from . import system, virtual_mic
 from .const import (VERSION, FRAME, FRAME_MS, SAMPLE_RATE, PACKET_MAGIC, PACKET_MAGIC_24K, PACKET_MAGIC_16K,
                     DISCOVERY_PROBE, DISCOVERY_REPLY, CMD_PAUSE, CMD_RESUME, SIO_UDP_CONNRESET)
 from .dsp import AudioProcessor
+from .wire import MAGIC_U32_TO_RATE, TcpStreamParser
 
 try:                                    # PortAudio missing raises OSError, not ImportError
     import sounddevice as _sd
@@ -34,25 +35,47 @@ except Exception as _e:                 # noqa: BLE001
 
 MASK32 = 0xFFFFFFFF
 
+_PCM_SCALE = np.float32(1.0 / 32768.0)
+_TWO_THIRDS = np.float32(2.0 / 3.0)
+_ONE_THIRD = np.float32(1.0 / 3.0)
+_ZERO_FRAME = np.zeros(FRAME, np.float32)
+_ZERO_FRAME.setflags(write=False)
+_PLC_RAMP1 = np.linspace(0.8, 0.4, FRAME, dtype=np.float32)
+_PLC_RAMP1.setflags(write=False)
+_PLC_RAMP2 = np.linspace(0.4, 0.0, FRAME, dtype=np.float32)
+_PLC_RAMP2.setflags(write=False)
+_GAP_RAMP = np.linspace(0.0, 1.0, 48, dtype=np.float32)
+_GAP_RAMP.setflags(write=False)
+
 
 def upsample_2x(x: np.ndarray) -> np.ndarray:
     """Upsample 24 kHz float32 samples to 48 kHz using linear interpolation."""
     n = len(x)
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
     out = np.empty(n * 2, dtype=np.float32)
     out[0::2] = x
-    x_next = np.append(x[1:], x[-1])
-    out[1::2] = (x + x_next) * 0.5
+    if n > 1:
+        out[1:-1:2] = (x[:-1] + x[1:]) * np.float32(0.5)
+    out[-1] = x[-1]
     return out
 
 
 def upsample_3x(x: np.ndarray) -> np.ndarray:
     """Upsample 16 kHz float32 samples to 48 kHz using linear interpolation."""
     n = len(x)
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
     out = np.empty(n * 3, dtype=np.float32)
-    x_next = np.append(x[1:], x[-1])
     out[0::3] = x
-    out[1::3] = x * (2.0 / 3.0) + x_next * (1.0 / 3.0)
-    out[2::3] = x * (1.0 / 3.0) + x_next * (2.0 / 3.0)
+    if n > 1:
+        a = x[:-1]
+        b = x[1:]
+        out[1:-2:3] = a * _TWO_THIRDS + b * _ONE_THIRD
+        out[2:-1:3] = a * _ONE_THIRD + b * _TWO_THIRDS
+    last = x[-1]
+    out[-2] = last * _TWO_THIRDS + last * _ONE_THIRD
+    out[-1] = last * _ONE_THIRD + last * _TWO_THIRDS
     return out
 
 
@@ -124,12 +147,17 @@ class Stats:
         self.plc_frames = 0
         self.underruns = 0       # sound-card ring starved while streaming
         self.dropped_drift = 0
+        self.bitrate_kbps = 0.0
+        self.packets_per_sec = 0.0
+        self._rate_t = time.monotonic()
+        self._rate_bytes = 0
+        self._rate_packets = 0
 
     def tick(self, now):
         dt = now - self._rate_t
         if dt >= 1.0:
-            self.bitrate_kbps = (self.bytes - self._rate_bytes) * 8.0 / (dt * 1000.0)
-            self.packets_per_sec = (self.packets - self._rate_packets) / dt
+            self.bitrate_kbps = max(0, self.bytes - self._rate_bytes) * 8.0 / (dt * 1000.0)
+            self.packets_per_sec = max(0, self.packets - self._rate_packets) / dt
             self._rate_t, self._rate_bytes, self._rate_packets = now, self.bytes, self.packets
 
     @property
@@ -651,16 +679,26 @@ class Recorder:
 class NetServer:
     """UDP + TCP listeners and the discovery beacon. Threads only parse and hand packets to the Receiver."""
 
+    MAX_TCP_CLIENTS = 8
+
     def __init__(self, receiver):
         self.rx = receiver
         self.port = 0
         self.gen = 0
         self.udp = None
         self.tcp_server = None
-        self.tcp_client = None
+        self._tcp_lock = threading.Lock()
+        self._tcp_clients = {}
+        self._tcp_threads = []
+        self._reply_cache = {}
         self.udp_error = ""
         self.tcp_error = ""
         self.threads = []
+
+    @property
+    def tcp_client(self):
+        with self._tcp_lock:
+            return next(reversed(self._tcp_clients.values()), None)
 
     # -- lifecycle -------------------------------------------------------------------
     def start(self, port):
@@ -669,6 +707,7 @@ class NetServer:
         self.gen += 1
         gen = self.gen
         self.udp_error = self.tcp_error = ""
+        self._reply_cache.clear()
         self.threads = [
             threading.Thread(target=self._udp_loop, args=(gen,), name="PM-UDP", daemon=True),
             threading.Thread(target=self._tcp_loop, args=(gen,), name="PM-TCP", daemon=True),
@@ -679,17 +718,24 @@ class NetServer:
 
     def stop(self):
         self.gen += 1
-        for s in (self.udp, self.tcp_server, self.tcp_client):
+        with self._tcp_lock:
+            clients = list(self._tcp_clients.values())
+            self._tcp_clients.clear()
+            workers = list(self._tcp_threads)
+            self._tcp_threads.clear()
+        for s in (self.udp, self.tcp_server, *clients):
             if s is not None:
                 try:
                     s.close()
                 except Exception:
                     pass
-        self.udp = self.tcp_server = self.tcp_client = None
-        for t in self.threads:
-            if t is not threading.current_thread():
+        self.udp = self.tcp_server = None
+        cur = threading.current_thread()
+        for t in (*self.threads, *workers):
+            if t is not cur:
                 t.join(timeout=1.5)
         self.threads = []
+        self._reply_cache.clear()
 
     @property
     def bind_ok(self):
@@ -750,21 +796,39 @@ class NetServer:
     def _handle_datagram(self, sock, buf, n, addr):
         if n < 4:
             return
-        if n >= 8 and bytes(buf[:4]) in (PACKET_MAGIC, PACKET_MAGIC_24K, PACKET_MAGIC_16K):
-            magic = bytes(buf[:4])
-            sr = 48000 if magic == PACKET_MAGIC else (24000 if magic == PACKET_MAGIC_24K else 16000)
-            seq = struct.unpack(">I", buf[4:8])[0]
-            pcm = bytes(buf[8:n - ((n - 8) & 1)])
-            if len(pcm) >= 2:
-                self.rx.on_packet(seq, pcm, addr, "UDP", sample_rate=sr)
-            return
-        head = bytes(buf[:min(n, 32)])
-        if head.startswith((b"PMD", DISCOVERY_PROBE)) or b"PMD0" in head or DISCOVERY_PROBE in head:
+        if n >= 8:
+            magic_u32, seq = struct.unpack_from(">II", buf, 0)
+            sr = MAGIC_U32_TO_RATE.get(magic_u32)
+            if sr is not None:
+                pcm_end = n - ((n - 8) & 1)
+                if pcm_end >= 10:
+                    mv = memoryview(buf)
+                    try:
+                        pcm = bytes(mv[8:pcm_end])
+                    finally:
+                        mv.release()
+                    self.rx.on_packet(seq, pcm, addr, "UDP", sample_rate=sr)
+                return
+        head_end = min(n, 32)
+        if (
+            buf.find(b"PMD", 0, 3) == 0
+            or buf.find(DISCOVERY_PROBE, 0, head_end) != -1
+            or buf.find(b"PMD0", 0, head_end) != -1
+        ):
             ip = self.rx.netinfo.matching_ip(addr[0])
-            sock.sendto(DISCOVERY_REPLY + f" {VERSION} {ip}".encode("ascii"), addr)
+            reply = self._reply_cache.get(ip)
+            if reply is None:
+                reply = DISCOVERY_REPLY + f" {VERSION} {ip}".encode("ascii")
+                self._reply_cache[ip] = reply
+            sock.sendto(reply, addr)
             return
-        if self._cfg()["accept_raw"] and n >= 480 and n % 2 == 0:
-            self.rx.on_packet(None, bytes(buf[:n]), addr, "UDP (raw)")
+        if self._cfg()["accept_raw"] and n >= 480 and (n & 1) == 0:
+            mv = memoryview(buf)
+            try:
+                pcm = bytes(mv[:n])
+            finally:
+                mv.release()
+            self.rx.on_packet(None, pcm, addr, "UDP (raw)")
 
     # -- TCP -------------------------------------------------------------------------
     def _tcp_loop(self, gen):
@@ -772,7 +836,7 @@ class NetServer:
         server = self._make_socket(socket.SOCK_STREAM)
         try:
             server.bind(("0.0.0.0", self.port))
-            server.listen(1)
+            server.listen(self.MAX_TCP_CLIENTS)
             server.settimeout(0.5)
         except OSError as e:
             self.tcp_error = f"TCP port {self.port} unavailable: {e}"
@@ -780,7 +844,6 @@ class NetServer:
             server.close()
             return
         self.tcp_server = server
-        frame_bytes = FRAME * 2
         while gen == self.gen:
             try:
                 conn, addr = server.accept()
@@ -790,39 +853,67 @@ class NetServer:
                 if gen != self.gen:
                     break
                 continue
-            try:
-                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                conn.settimeout(0.5)
-                self.tcp_client = conn
-                rx.log.info(f"TCP connection from {addr[0]}")
-                acc = bytearray()
-                idle = 0.0
-                while gen == self.gen:
+            with self._tcp_lock:
+                self._tcp_threads = [t for t in self._tcp_threads if t.is_alive()]
+                if len(self._tcp_clients) >= self.MAX_TCP_CLIENTS:
+                    rx.log.warn(f"Rejecting TCP connection from {addr[0]}: client cap ({self.MAX_TCP_CLIENTS}) reached")
                     try:
-                        chunk = conn.recv(4096)
-                    except socket.timeout:
-                        idle += 0.5
-                        if idle >= 2.0:
-                            rx.log.warn(f"TCP client {addr[0]} timed out after {idle:.1f}s of silence")
-                            break
-                        continue
-                    if not chunk:
-                        break
-                    idle = 0.0
-                    acc.extend(chunk)
-                    while len(acc) >= frame_bytes:
-                        frame = bytes(acc[:frame_bytes])
-                        del acc[:frame_bytes]
-                        rx.on_packet(None, frame, addr, "TCP")
-            except OSError:
-                pass
-            finally:
-                self.tcp_client = None
+                        conn.close()
+                    except Exception:
+                        pass
+                    continue
+                self._tcp_clients[addr] = conn
+                worker = threading.Thread(
+                    target=self._tcp_client_loop,
+                    args=(gen, conn, addr),
+                    name=f"PM-TCP-{addr[0]}:{addr[1]}",
+                    daemon=True,
+                )
+                self._tcp_threads.append(worker)
+            worker.start()
+
+    def _tcp_client_loop(self, gen, conn, addr):
+        rx = self.rx
+        default_rate = self._cfg().get("raw_tcp_rate", 48000)
+        parser = TcpStreamParser(default_rate=default_rate)
+        buf = bytearray(4096)
+        mv = memoryview(buf)
+        try:
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            conn.settimeout(0.5)
+            rx.log.info(f"TCP connection from {addr[0]}:{addr[1]}")
+            idle = 0.0
+            while gen == self.gen:
                 try:
-                    conn.close()
-                except Exception:
-                    pass
-                rx.log.info("TCP connection closed")
+                    n = conn.recv_into(buf)
+                except socket.timeout:
+                    idle += 0.5
+                    if idle >= 2.0:
+                        rx.log.warn(f"TCP client {addr[0]} timed out after {idle:.1f}s of silence")
+                        break
+                    continue
+                if n <= 0:
+                    break
+                idle = 0.0
+                try:
+                    frames = parser.feed(mv[:n])
+                except (BufferError, ValueError) as exc:
+                    rx.log.warn(f"Closing invalid TCP stream from {addr[0]}: {exc}")
+                    break
+                for seq, frame_pcm, sr in frames:
+                    rx.on_packet(seq, frame_pcm, addr, "TCP", sample_rate=sr)
+        except OSError:
+            pass
+        finally:
+            mv.release()
+            with self._tcp_lock:
+                if self._tcp_clients.get(addr) is conn:
+                    del self._tcp_clients[addr]
+            try:
+                conn.close()
+            except Exception:
+                pass
+            rx.log.info(f"TCP connection closed ({addr[0]}:{addr[1]})")
 
     # -- discovery beacon ------------------------------------------------------------
     def _beacon_loop(self, gen):
@@ -832,17 +923,26 @@ class NetServer:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         except Exception:
             pass
+        beacon_cache = {}
         while gen == self.gen:
             if self._cfg()["beacon"]:
                 try:
                     for ip, bcast in rx.netinfo.broadcast_targets():
+                        pkt = beacon_cache.get(ip)
+                        if pkt is None:
+                            pkt = DISCOVERY_REPLY + f" {VERSION} {ip}".encode("ascii")
+                            beacon_cache[ip] = pkt
                         try:
-                            sock.sendto(DISCOVERY_REPLY + f" {VERSION} {ip}".encode("ascii"), (bcast, self.port))
+                            sock.sendto(pkt, (bcast, self.port))
                         except Exception:
                             pass
+                    best = rx.netinfo.best_ip()
+                    pkt = beacon_cache.get(best)
+                    if pkt is None:
+                        pkt = DISCOVERY_REPLY + f" {VERSION} {best}".encode("ascii")
+                        beacon_cache[best] = pkt
                     try:
-                        sock.sendto(DISCOVERY_REPLY + f" {VERSION} {rx.netinfo.best_ip()}".encode("ascii"),
-                                    ("255.255.255.255", self.port))
+                        sock.sendto(pkt, ("255.255.255.255", self.port))
                     except Exception:
                         pass
                 except Exception:
@@ -861,13 +961,20 @@ class NetServer:
                 sent = True
             except Exception:
                 pass
-        c = self.tcp_client
-        if c is not None:
-            try:
-                c.sendall(cmd)
-                sent = True
-            except Exception:
-                pass
+        with self._tcp_lock:
+            conns = list(self._tcp_clients.items())
+        if conns:
+            locked = bool(self._cfg().get("lock_client", False))
+            if locked and addr is not None:
+                targets = [c for a, c in conns if a == addr] or [c for a, c in conns if a[0] == addr[0]]
+            else:
+                targets = [c for _, c in conns]
+            for c in targets:
+                try:
+                    c.sendall(cmd)
+                    sent = True
+                except Exception:
+                    pass
         return sent
 
 
@@ -899,6 +1006,7 @@ class Receiver:
         self.client_ip = ""
         self.client_addr = None
         self.client_sample_rate = 48000
+        self._clients_lock = threading.RLock()
         self.client_streams = {}          # addr -> ClientSession for multi-device mixing
         self.transport = "UDP"
         self.tone_left = 0
@@ -1072,6 +1180,10 @@ class Receiver:
         """(Re)read the advanced audio options from the settings."""
         a = self.config.data["audio"]
         self.jb.set_limits(a["adaptive_max_ms"], a["drift_correction"])
+        with self._clients_lock:
+            for s in self.client_streams.values():
+                if s.jb is not self.jb:
+                    s.jb.set_limits(a["adaptive_max_ms"], a["drift_correction"])
         self.main.channel_mode = a["out_channels"] if a["out_channels"] in ("both", "left", "right") else "both"
 
     def set_jitter(self, ms, adaptive):
@@ -1079,6 +1191,11 @@ class Receiver:
         a["jitter_ms"], a["adaptive_jitter"] = int(ms), bool(adaptive)
         self.jb.adaptive = bool(adaptive)
         self.jb.set_target_ms(ms)
+        with self._clients_lock:
+            for s in self.client_streams.values():
+                if s.jb is not self.jb:
+                    s.jb.adaptive = bool(adaptive)
+                    s.jb.set_target_ms(ms)
         self.config.save_soon()
 
     def set_port(self, port):
@@ -1186,16 +1303,73 @@ class Receiver:
         ring_ms = self.main.ring.level() * 1000.0 / SAMPLE_RATE
         return self.jb.depth_ms + ring_ms + self.main.latency_ms + self.processor.latency_ms
 
-    # -- network callbacks (called on socket threads; keep them cheap) ----------------
+    # -- session ownership & packet ingest -----------------------------------------
+    def _transfer_jb_state(self, src_jb, dst_jb):
+        """Transfer frames & adaptation state from src_jb into dst_jb cleanly (called under _clients_lock)."""
+        with src_jb.lock, dst_jb.lock:
+            dst_jb.base_target = src_jb.base_target
+            dst_jb.extra_frames = src_jb.extra_frames
+            dst_jb.max_target = src_jb.max_target
+            dst_jb.target = src_jb.target
+            dst_jb.adaptive = src_jb.adaptive
+            dst_jb.drift_correction = src_jb.drift_correction
+            dst_jb.frames = dict(src_jb.frames)
+            dst_jb.next_seq = src_jb.next_seq
+            dst_jb.buffering = src_jb.buffering
+            dst_jb.prebuffer_t = src_jb.prebuffer_t
+            dst_jb.misses = src_jb.misses
+            dst_jb.idle = src_jb.idle
+            dst_jb.raw_seq = src_jb.raw_seq
+            dst_jb.skipped = src_jb.skipped
+            dst_jb._stable_t = src_jb._stable_t
+            dst_jb._last_grow = src_jb._last_grow
+            dst_jb._late_run = src_jb._late_run
+            dst_jb._miss_t = src_jb._miss_t
+            dst_jb._win_min = src_jb._win_min
+            dst_jb._win_t = src_jb._win_t
+            src_jb.frames.clear()
+            src_jb.idle = True
+
+    def _promote_survivor_if_needed(self, removed_session):
+        """Ensure an active surviving session inherits self.jb whenever its owner is removed."""
+        if removed_session.jb is not self.jb or not self.client_streams:
+            return
+        survivor = max(self.client_streams.values(), key=lambda s: s.last_seen)
+        if survivor.jb is not self.jb:
+            self._transfer_jb_state(survivor.jb, self.jb)
+            survivor.jb = self.jb
+        self.client_ip = survivor.ip
+        self.client_addr = survivor.addr
+        self.transport = survivor.transport
+        self.client_sample_rate = survivor.sample_rate
+
+    def _decode_pcm_48k(self, pcm, sample_rate):
+        x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) * _PCM_SCALE
+        if sample_rate == 24000:
+            x = upsample_2x(x)
+        elif sample_rate == 16000:
+            x = upsample_3x(x)
+        n = len(x)
+        if n < FRAME:
+            padded = np.zeros(FRAME, np.float32)
+            padded[:n] = x
+            return padded
+        if n > FRAME:
+            return x[:FRAME]
+        return x
+
     def on_packet(self, seq, pcm, addr, transport, sample_rate=48000):
         now = time.monotonic()
         st = self.stats
         ip = addr[0]
+        cfg_data = self.config.data
+        net_cfg = cfg_data["network"]
+        audio_cfg = cfg_data["audio"]
         gap = now - st.last_packet
-        alive = st.last_packet > 0 and gap < self.stream_timeout
+        alive = st.last_packet > 0 and gap < float(net_cfg["stream_timeout_s"])
 
         # Lock to first phone check (lock_client)
-        if self.client_ip and ip != self.client_ip and alive and self.config.data["network"]["lock_client"]:
+        if self.client_ip and ip != self.client_ip and alive and net_cfg["lock_client"]:
             st.ignored += 1
             if st.ignored == 1 or st.ignored % 500 == 0:
                 self.log.warn(f"Ignoring audio from {ip}: already receiving from {self.client_ip}")
@@ -1203,38 +1377,60 @@ class Receiver:
 
         self.client_sample_rate = sample_rate
 
-        # Multi-client session tracking with session cap (max 8)
-        session = self.client_streams.get(addr)
-        if session is None:
-            if len(self.client_streams) >= 8:
-                # Evict oldest idle session
-                oldest_addr = min(self.client_streams.keys(), key=lambda a: self.client_streams[a].last_seen)
-                if (now - self.client_streams[oldest_addr].last_seen) > 1.0:
-                    del self.client_streams[oldest_addr]
+        with self._clients_lock:
+            session = self.client_streams.get(addr)
+            if session is None:
+                if len(self.client_streams) >= 8:
+                    oldest_addr = min(self.client_streams.keys(), key=lambda a: self.client_streams[a].last_seen)
+                    if (now - self.client_streams[oldest_addr].last_seen) > 1.0:
+                        removed = self.client_streams.pop(oldest_addr)
+                        self._promote_survivor_if_needed(removed)
+                    else:
+                        st.ignored += 1
+                        return
+                if not any(s.jb is self.jb for s in self.client_streams.values()):
+                    self.jb.reset()
+                    jb = self.jb
                 else:
-                    st.ignored += 1
-                    return
-            a = self.config.data["audio"]
-            jb = JitterBuffer(a["jitter_ms"], a["adaptive_jitter"])
-            session = ClientSession(addr, transport, sample_rate, jb)
-            self.client_streams[addr] = session
-            if len(self.client_streams) > 1:
-                self.log.info(f"Additional phone connected: {ip} ({sample_rate // 1000}kHz) [Total: {len(self.client_streams)} devices]")
-        else:
-            session.sample_rate = sample_rate
-            session.last_seen = now
+                    jb = JitterBuffer(audio_cfg["jitter_ms"], audio_cfg["adaptive_jitter"])
+                    jb.set_limits(audio_cfg["adaptive_max_ms"], audio_cfg["drift_correction"])
+                session = ClientSession(addr, transport, sample_rate, jb)
+                self.client_streams[addr] = session
+                total = len(self.client_streams)
+                if total > 1:
+                    self.log.info(f"Additional phone connected: {ip} ({sample_rate // 1000}kHz) [Total: {total} devices]")
+            else:
+                session.sample_rate = sample_rate
+                session.transport = transport
+                session.last_seen = now
 
-        session.jb.push(seq, pcm)
+            is_new_primary = not alive or not self.client_ip
+            if is_new_primary:
+                if session.jb is self.jb:
+                    self.jb.reset()
+                else:
+                    # Reclaim self.jb if previous primary is already idle
+                    for s in self.client_streams.values():
+                        if s is not session and s.jb is self.jb:
+                            s.jb = JitterBuffer(audio_cfg["jitter_ms"], audio_cfg["adaptive_jitter"])
+                            s.jb.set_limits(audio_cfg["adaptive_max_ms"], audio_cfg["drift_correction"])
+                            self._transfer_jb_state(self.jb, s.jb)
+                            break
+                    session.jb.reset()
+                    self._transfer_jb_state(session.jb, self.jb)
+                    session.jb = self.jb
 
-        # Primary client assignment (only reset session when primary client is idle/timed-out or initial)
-        if not alive or not self.client_ip:
+            # Single push to this session's JitterBuffer (primary session owns self.jb directly)
+            session.jb.push(seq, pcm)
+
+        # Primary client metadata & stats assignment
+        if is_new_primary:
             first = st.last_packet == 0 or ip != self.client_ip
             self.client_ip, self.client_addr, self.transport = ip, addr, transport
             ignored = st.ignored
             st.reset_session()
             st.ignored = ignored
             st.stream_start = now
-            self.jb.reset()
             self._reset_dsp = True
             self.log.info(f"{'Phone connected' if first else 'Stream resumed'}: {ip} via {transport} ({sample_rate // 1000}kHz)")
         elif ip == self.client_ip:
@@ -1268,10 +1464,6 @@ class Receiver:
                 d = (now - st.last_arrival) * 1000.0 - len(pcm) * 500.0 / SAMPLE_RATE
                 st.jitter_ms += (abs(d) - st.jitter_ms) / 16.0
         st.last_arrival = now
-
-        # Single-client mode directly feeds self.jb; multi-client mode feeds per-session jb
-        if len(self.client_streams) <= 1:
-            self.jb.push(seq, pcm)
 
     # -- engine thread ---------------------------------------------------------------
     def _engine_loop(self):
@@ -1340,29 +1532,40 @@ class Receiver:
 
     def _produce(self):
         """Pull one block from the jitter buffer, run the DSP chain, fan out. Returns False if there was nothing."""
-        # Prune dead client sessions
         now = time.monotonic()
-        dead = [a for a, s in self.client_streams.items() if (now - s.last_seen) > 3.5]
-        for d in dead:
-            del self.client_streams[d]
+        cfg_data = self.config.data
+        net_cfg = cfg_data["network"]
+        audio_cfg = cfg_data["audio"]
+        rec_cfg = cfg_data["recording"]
 
-        multi_blocks = []
-        if len(self.client_streams) > 1:
-            for session in list(self.client_streams.values()):
-                p_pcm, _ = session.jb.pop()
+        with self._clients_lock:
+            dead = [a for a, s in self.client_streams.items() if (now - s.last_seen) > 3.5]
+            for d in dead:
+                removed = self.client_streams.pop(d)
+                self._promote_survivor_if_needed(removed)
+            sessions = list(self.client_streams.values())
+
+        n_sessions = len(sessions)
+        multi_blocks = None
+        pcm = None
+        kind = WAIT
+
+        if n_sessions > 1:
+            multi_blocks = []
+            primary_kind = WAIT
+            for s in sessions:
+                p_pcm, p_kind = s.jb.pop()
+                if s.jb is self.jb:
+                    primary_kind = p_kind
                 if p_pcm is not None:
-                    p_x = np.frombuffer(p_pcm, dtype="<i2").astype(np.float32) * np.float32(1.0 / 32768.0)
-                    if session.sample_rate == 24000:
-                        p_x = upsample_2x(p_x)
-                    elif session.sample_rate == 16000:
-                        p_x = upsample_3x(p_x)
-                    if len(p_x) < FRAME:
-                        p_x = np.pad(p_x, (0, FRAME - len(p_x)))
-                    elif len(p_x) > FRAME:
-                        p_x = p_x[:FRAME]
-                    multi_blocks.append(p_x)
+                    multi_blocks.append(self._decode_pcm_48k(p_pcm, s.sample_rate))
+            kind = primary_kind
+        else:
+            # Single-session (shares self.jb) or zero sessions (fade-out/idle drain)
+            pcm, kind = self.jb.pop()
+            if n_sessions == 1 and pcm is not None:
+                self.client_sample_rate = sessions[0].sample_rate
 
-        pcm, kind = self.jb.pop()
         tone = self._tone_block(FRAME)
 
         if self._reset_dsp:
@@ -1371,23 +1574,26 @@ class Receiver:
             self._after_gap = True
 
         if multi_blocks:
-            # Multi-device active mixing
-            if self.config.data["network"].get("mix_mode", "sum") == "duck":
-                powers = [float(np.mean(b ** 2)) for b in multi_blocks]
+            # Multi-device active mixing (sum or auto-duck)
+            if net_cfg.get("mix_mode", "sum") == "duck":
+                powers = [float(np.dot(b, b)) / len(b) for b in multi_blocks]
                 max_idx = int(np.argmax(powers))
                 summed = np.zeros(FRAME, dtype=np.float32)
                 for idx, b in enumerate(multi_blocks):
-                    # -12 dB ducking (0.25x power)
-                    weight = 1.0 if idx == max_idx or powers[max_idx] < 1e-4 else 0.25
+                    weight = np.float32(1.0 if idx == max_idx or powers[max_idx] < 1e-4 else 0.25)
                     summed += b * weight
-                x = np.tanh(summed * 1.1)
+                x = np.tanh(summed * np.float32(1.1))
             else:
-                summed = np.sum(multi_blocks, axis=0)
+                summed = np.zeros(FRAME, dtype=np.float32)
+                for b in multi_blocks:
+                    summed += b
                 x = np.tanh(summed)
             self._last_raw = x
             self._plc_run = 0
             pcm = True
-        elif pcm is None and kind == WAIT:
+            if self.jb.take_skipped():
+                self._after_gap = True
+        elif n_sessions > 1 and kind == WAIT:
             self._plc_run = 0
             self._last_raw = None
             self._after_gap = True
@@ -1396,20 +1602,23 @@ class Receiver:
                 self.processor.level_rms = 0.0
                 self.processor.level_db = -80.0
                 return False
-            self._emit(tone, tone, tone)
+            self._emit(tone, tone, tone, rec_cfg)
+            return True
+        elif n_sessions <= 1 and pcm is None and kind == WAIT:
+            self._plc_run = 0
+            self._last_raw = None
+            self._after_gap = True
+            if tone is None:
+                self.processor.level_peak = 0.0
+                self.processor.level_rms = 0.0
+                self.processor.level_db = -80.0
+                return False
+            self._emit(tone, tone, tone, rec_cfg)
             return True
 
         if not multi_blocks:
             if pcm is not None:
-                x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) * np.float32(1.0 / 32768.0)
-                if self.client_sample_rate == 24000:
-                    x = upsample_2x(x)
-                elif self.client_sample_rate == 16000:
-                    x = upsample_3x(x)
-                if len(x) < FRAME:
-                    x = np.pad(x, (0, FRAME - len(x)))
-                elif len(x) > FRAME:
-                    x = x[:FRAME]
+                x = self._decode_pcm_48k(pcm, self.client_sample_rate)
                 self._last_raw = x
                 self._plc_run = 0
                 if self.jb.take_skipped():
@@ -1417,20 +1626,20 @@ class Receiver:
             else:                                           # packet lost: repeat + fade the last block
                 self._plc_run += 1
                 self.stats.plc_frames += 1
-                base = self._last_raw if self._last_raw is not None else np.zeros(FRAME, np.float32)
-                if self.config.data["audio"]["plc_mode"] == "silence":
-                    x = np.zeros(len(base), np.float32)
+                base = self._last_raw
+                if base is None or audio_cfg["plc_mode"] == "silence" or self._plc_run > 2:
+                    x = _ZERO_FRAME
                 elif self._plc_run == 1:
-                    x = base * np.linspace(0.8, 0.4, len(base), dtype=np.float32)
-                elif self._plc_run == 2:
-                    x = base * np.linspace(0.4, 0.0, len(base), dtype=np.float32)
+                    ramp = _PLC_RAMP1 if len(base) == FRAME else np.linspace(0.8, 0.4, len(base), dtype=np.float32)
+                    x = base * ramp
                 else:
-                    x = np.zeros(len(base), np.float32)
+                    ramp = _PLC_RAMP2 if len(base) == FRAME else np.linspace(0.4, 0.0, len(base), dtype=np.float32)
+                    x = base * ramp
                 self._after_gap = True
 
         raw = x
         if self.paused:
-            out = np.zeros(len(x), np.float32)
+            out = _ZERO_FRAME if len(x) == FRAME else np.zeros(len(x), np.float32)
             raw = out                                   # a muted microphone is not recorded either
             self.processor.level_peak = self.processor.level_rms = 0.0
             self.processor.level_db = -80.0
@@ -1438,7 +1647,7 @@ class Receiver:
             if self._after_gap and pcm is not None:
                 x = x.copy()
                 m = min(len(x), 48)
-                x[:m] *= np.linspace(0.0, 1.0, m, dtype=np.float32)
+                x[:m] *= _GAP_RAMP[:m]
                 self._after_gap = False
             out = self.processor.process(x)             # keep processing while gated so the noise model stays current
             target = 0.0 if self.gate_closed else 1.0
@@ -1451,19 +1660,20 @@ class Receiver:
                 raw = raw * curve
                 self._gate_gain = target
             elif target == 0.0:
-                out = np.zeros(len(out), np.float32)
+                out = _ZERO_FRAME if len(out) == FRAME else np.zeros(len(out), np.float32)
                 raw = out
             if target == 0.0 and self._gate_gain == 0.0 and not np.any(out):
                 self.processor.level_peak = self.processor.level_rms = 0.0
                 self.processor.level_db = -80.0
         if tone is not None and len(tone) == len(out):
             out = out + tone
-        self._emit(out, raw, out)
+        self._emit(out, raw, out, rec_cfg)
         return True
 
-    def _emit(self, out, raw, processed):
+    def _emit(self, out, raw, processed, rec_cfg=None):
         self.main.ring.write(out)
         if self.monitoring:
             self.monitor.ring.write(out * np.float32(self.processor.monitor_volume))
         if self.recorder.active:
-            self.recorder.write(raw if self.config.data["recording"]["source"] == "raw" else processed)
+            source = rec_cfg["source"] if rec_cfg is not None else self.config.data["recording"]["source"]
+            self.recorder.write(raw if source == "raw" else processed)

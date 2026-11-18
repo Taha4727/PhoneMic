@@ -79,6 +79,123 @@ def test_chain_soak():
         assert y.shape == (480,) and np.all(np.isfinite(y)) and np.max(np.abs(y)) <= 1.0
 
 
+def test_denoiser_block_min_equivalence():
+    # Verify B=16 +inf-padded block-min cache matches naive hist[:filled].min(axis=0)
+    # bit-for-bit across aligned and non-aligned ring sizes (25, 100, 101, 200, 500 frames).
+    for frames in (25, 100, 101, 200, 500):
+        hist_s = (frames * dsp.FRAME) / FS
+        dn = dsp.SpectralDenoiser(hop=dsp.FRAME, fs=FS, history_s=hist_s)
+        assert dn.frames == frames
+        n_hops = frames + 35
+        sig = (rng.standard_normal(n_hops * dsp.FRAME) * 0.05).astype(np.float32)
+        for i in range(n_hops):
+            blk = sig[i * dsp.FRAME:(i + 1) * dsp.FRAME]
+            out = dn.process(blk, 0.65)
+            assert out.shape == (dsp.FRAME,) and out.dtype == np.float32
+            n_b = (dn.filled + dn._BLOCK - 1) // dn._BLOCK
+            cached = dn._block_mins[:n_b].min(axis=0)
+            naive = dn.hist[:dn.filled].min(axis=0)
+            assert np.array_equal(cached, naive), (frames, i, np.max(np.abs(cached - naive)))
+
+    # Verify FIFO fast-path (len == hop with empty FIFOs) vs variable chunk sizes match within float32 tolerance
+    # when total aligned hops complete.
+    sig = (rng.standard_normal(dsp.FRAME * 60) * 0.08).astype(np.float32)
+    dn_fast = dsp.SpectralDenoiser()
+    y_fast = np.concatenate([dn_fast.process(sig[i:i + dsp.FRAME], 0.5) for i in range(0, len(sig), dsp.FRAME)])
+    # Also ensure non-empty FIFO forces fallback cleanly on hop-sized blocks after odd chunk
+    dn_var = dsp.SpectralDenoiser()
+    y_var_parts = []
+    pos = 0
+    sizes = [17, 240, 333, 480, 1000]
+    while pos < len(sig):
+        step = min(sizes[len(y_var_parts) % len(sizes)], len(sig) - pos)
+        y_var_parts.append(dn_var.process(sig[pos:pos + step], 0.5))
+        pos += step
+    y_var = np.concatenate(y_var_parts)
+    assert y_fast.shape == sig.shape and y_var.shape == sig.shape
+    assert np.all(np.isfinite(y_fast)) and np.all(np.isfinite(y_var))
+
+    # Aligned multi-hop chunks [960, 480, 1440, 480] must match single-hop fast-path bit-for-bit
+    sig_aligned = (rng.standard_normal(dsp.FRAME * 7) * 0.08).astype(np.float32)
+    dn_a = dsp.SpectralDenoiser()
+    dn_b = dsp.SpectralDenoiser()
+    out_a = np.concatenate([dn_a.process(sig_aligned[i:i + dsp.FRAME], 0.5) for i in range(0, len(sig_aligned), dsp.FRAME)])
+    parts_b = []
+    pos = 0
+    for step in (960, 480, 1440, 480):
+        parts_b.append(dn_b.process(sig_aligned[pos:pos + step], 0.5))
+        pos += step
+    out_b = np.concatenate(parts_b)
+    assert np.array_equal(out_a, out_b), np.max(np.abs(out_a - out_b))
+
+
+def test_analyzer_circular_buffer_equivalence():
+    an = dsp.Analyzer(FS)
+    ref_buf = np.zeros(an.NFFT, np.float32)
+    assert np.array_equal(an.buf, ref_buf)
+
+    # Empty push is a no-op
+    an.push(np.zeros(0, np.float32))
+    assert np.array_equal(an.buf, ref_buf)
+
+    # Push varied chunks crossing single boundary, wraparound boundary, and >= NFFT overwrite
+    chunks = [
+        (rng.standard_normal(480) * 0.25).astype(np.float32)
+        for _ in range(12)
+    ] + [
+        (rng.standard_normal(333) * 0.3).astype(np.float32),
+        (rng.standard_normal(2500) * 0.4).astype(np.float32),
+        (rng.standard_normal(480) * 0.15).astype(np.float32),
+        (rng.standard_normal(2047) * 0.2).astype(np.float32),
+    ]
+    for c in chunks:
+        an.push(c)
+        ref_buf = np.concatenate((ref_buf, c))[-an.NFFT:]
+        assert an.buf.shape == (an.NFFT,)
+        assert np.array_equal(an.buf, ref_buf), len(c)
+
+        an.update()
+        # Independent reference Analyzer computation on ref_buf
+        spec = np.abs(np.fft.rfft(ref_buf * an.window)) / an.norm
+        mx = np.maximum.reduceat(spec[:an.end], an.starts)
+        db = 20.0 * np.log10(mx + 1e-9)
+        ref_bands = np.clip((db - an.DB_MIN) / (an.DB_MAX - an.DB_MIN), 0.0, 1.0).astype(np.float32)
+        ref_scope = ref_buf[-1024::8]
+        assert np.max(np.abs(an.bands - ref_bands)) < 1e-6
+        assert np.array_equal(an.scope, ref_scope)
+        # Scope must be a detached copy so further pushes don't mutate snapshot
+        snap = an.scope
+        assert not np.shares_memory(snap, an._ring)
+
+    # Reset clears ring, bands, and scope
+    an.reset()
+    assert np.all(an.buf == 0.0) and np.all(an.bands == 0.0) and np.all(an.scope == 0.0)
+
+    # Property setter backwards compatibility
+    pat = np.linspace(-0.5, 0.5, an.NFFT, dtype=np.float32)
+    an.buf = pat
+    assert np.allclose(an.buf, pat, atol=1e-6)
+
+
+def test_dynamics_rms_dot_equivalence():
+    x = (rng.standard_normal(480) * 0.2).astype(np.float32)
+    ref_rms = float(np.sqrt(np.mean(x.astype(np.float64) ** 2)))
+    dot_rms = float(np.sqrt(float(np.dot(x, x)) / len(x)))
+    assert abs(dot_rms - ref_rms) < 1e-6, (dot_rms, ref_rms)
+
+    # Verify AudioProcessor viz_active toggling and level_rms calculation
+    p = dsp.AudioProcessor()
+    p.apply_fx({**dsp.FX_BASE, "smart_noise_cancel": False, "gate_enabled": False,
+                "agc_enabled": True, "comp_enabled": True, "deess_enabled": True})
+    p.viz_active = False
+    y1 = p.process(x)
+    assert np.all(p.analyzer.buf == 0.0)
+    assert abs(p.level_rms - float(np.sqrt(np.mean(y1.astype(np.float64) ** 2)))) < 1e-6
+    p.viz_active = True
+    y2 = p.process(x)
+    assert not np.all(p.analyzer.buf == 0.0) and np.all(np.isfinite(y2))
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

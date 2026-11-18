@@ -86,7 +86,7 @@ def test_side_effects_reach_the_engine_and_the_window():
     assert rx.jb.adaptive is False
     b.set(sm.BY_KEY["app.always_on_top"], True); b.set(sm.BY_KEY["app.advanced_mode"], True)
     assert ("topmost", True) in hooks.calls and ("advanced", True) in hooks.calls
-    b.set(sm.BY_KEY["app.accent"], "blue")
+    b.set(sm.BY_KEY["audio.high_priority"], False)
     assert ("notify", "info") in hooks.calls, "restart-only settings tell the user"
     b.set(sm.BY_KEY["audio.output_latency"], "medium")
     assert cfg.data["audio"]["output_latency"] == "medium" and rx.ring_target == int(480 * 2.0)

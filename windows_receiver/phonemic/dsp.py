@@ -207,6 +207,7 @@ class SpectralDenoiser:
     Works with arbitrary input chunk sizes; algorithmic delay is exactly one hop.
     """
     ALPHA = 0.90        # decision-directed smoothing
+    _BLOCK = 16         # sub-block size for bounded-cost sliding minimum statistics
 
     def __init__(self, hop=FRAME, fs=SAMPLE_RATE, history_s=2.0):
         self.hop = hop
@@ -216,9 +217,12 @@ class SpectralDenoiser:
         self.window = np.sin(np.pi * (n + 0.5) / self.win).astype(np.float32)
         self.history_s = float(history_s)
         self.frames = max(16, int(self.history_s * fs / hop))
+        self._blocks = (self.frames + self._BLOCK - 1) // self._BLOCK
+        self._pad_frames = self._blocks * self._BLOCK
         # The minimum of N noisy estimates is biased low by a factor that grows with N (calibrated empirically,
         # with ~10 % safety margin so that the noise floor is never under-estimated).
         self.bias = 1.1 * (0.529 + 0.307 * math.log(self.frames * hop / FRAME))
+        self._frame_buf = np.empty(self.win, np.float32)
         self.reset()
 
     def reset(self):
@@ -226,7 +230,10 @@ class SpectralDenoiser:
         self.out_fifo = np.zeros(0, np.float32)
         self.prev = np.zeros(self.hop, np.float32)
         self.tail = np.zeros(self.hop, np.float32)
-        self.hist = np.full((self.frames, self.nb), np.inf, np.float32)
+        self._hist_pad = np.full((self._pad_frames, self.nb), np.inf, np.float32)
+        self.hist = self._hist_pad[:self.frames]
+        self._block_view = self._hist_pad.reshape(self._blocks, self._BLOCK, self.nb)
+        self._block_mins = np.full((self._blocks, self.nb), np.inf, np.float32)
         self.pos = 0
         self.filled = 0
         self.ps = None
@@ -238,17 +245,26 @@ class SpectralDenoiser:
         return 1000.0 * self.hop / SAMPLE_RATE
 
     def _hop(self, x, amount, max_red_db):
-        frame = np.concatenate((self.prev, x))
+        self._frame_buf[:self.hop] = self.prev
+        self._frame_buf[self.hop:] = x
         self.prev = x
-        X = np.fft.rfft(frame * self.window)
+        self._frame_buf *= self.window
+        X = np.fft.rfft(self._frame_buf)
         P = (X.real * X.real + X.imag * X.imag).astype(np.float32)
 
-        # --- noise floor tracking (minimum statistics) ---------------------------------
+        # --- noise floor tracking (minimum statistics with B=16 +inf-padded block cache) ---
         self.ps = P.copy() if self.ps is None else 0.85 * self.ps + 0.15 * P
-        self.hist[self.pos] = self.ps
-        self.pos = (self.pos + 1) % self.frames
-        self.filled = min(self.frames, self.filled + 1)
-        noise = self.hist[:self.filled].min(axis=0) * self.bias
+        pos = self.pos
+        b = pos // self._BLOCK
+        self.hist[pos] = self.ps
+        self._block_mins[b] = self._block_view[b].min(axis=0)
+        self.pos = (pos + 1) % self.frames
+        if self.filled < self.frames:
+            self.filled += 1
+            n_b = (self.filled + self._BLOCK - 1) // self._BLOCK
+            noise = self._block_mins[:n_b].min(axis=0) * self.bias
+        else:
+            noise = self._block_mins.min(axis=0) * self.bias
         noise = noise * (1.0 + 1.5 * amount) + 1e-12
 
         # --- gain ---------------------------------------------------------------------------
@@ -269,7 +285,12 @@ class SpectralDenoiser:
 
     def process(self, samples, amount, max_reduction_db=0.0):
         n = len(samples)
-        self.in_fifo = np.concatenate((self.in_fifo, samples.astype(np.float32, copy=False)))
+        if n == 0:
+            return np.zeros(0, np.float32)
+        s32 = samples.astype(np.float32, copy=False)
+        if n == self.hop and len(self.in_fifo) == 0 and len(self.out_fifo) == 0:
+            return self._hop(s32, amount, max_reduction_db)
+        self.in_fifo = np.concatenate((self.in_fifo, s32))
         produced = []
         while len(self.in_fifo) >= self.hop:
             produced.append(self._hop(self.in_fifo[:self.hop], amount, max_reduction_db))
@@ -289,9 +310,14 @@ class SpectralDenoiser:
 # ==============================================================================
 # DYNAMICS
 # ==============================================================================
+_UNIT_RAMP_FRAME = np.arange(1, FRAME + 1, dtype=np.float32) / np.float32(FRAME)
+_UNIT_RAMP_FRAME.setflags(write=False)
+
+
 def _ramp(g0, g1, n):
     """Per-sample linear gain ramp from g0 (exclusive) to g1 (inclusive) over n samples."""
-    return g0 + (g1 - g0) * (np.arange(1, n + 1, dtype=np.float32) / n)
+    basis = _UNIT_RAMP_FRAME if n == FRAME else (np.arange(1, n + 1, dtype=np.float32) / np.float32(n))
+    return np.float32(g0) + np.float32(g1 - g0) * basis
 
 
 def _smooth(current, target, block_ms, tau_ms):
@@ -358,7 +384,7 @@ class AutoGain:
         if n == 0:
             return x
         block_ms = 1000.0 * n / SAMPLE_RATE
-        rms = float(np.sqrt(np.mean(x * x)))
+        rms = math.sqrt(float(np.dot(x, x)) / n)
         peak = float(np.max(np.abs(x)))
         lvl = lin_to_db(rms)
         g0 = self.gain_db
@@ -390,7 +416,7 @@ class Compressor:
         if n == 0:
             return x
         block_ms = 1000.0 * n / SAMPLE_RATE
-        lvl = lin_to_db(float(np.sqrt(np.mean(x * x))))
+        lvl = lin_to_db(math.sqrt(float(np.dot(x, x)) / n))
         over = lvl - threshold_db
         slope = 1.0 - 1.0 / max(ratio, 1.0)
         k = max(knee_db, 0.0)
@@ -431,7 +457,7 @@ class DeEsser:
             self._freq = freq
         band = self.bp.process(x)
         block_ms = 1000.0 * n / SAMPLE_RATE
-        over = lin_to_db(float(np.sqrt(np.mean(band * band)))) - threshold_db
+        over = lin_to_db(math.sqrt(float(np.dot(band, band)) / n)) - threshold_db
         target = min(range_db, over * 0.75) if over > 0 else 0.0           # 4:1 above the threshold, capped by the range
         gr1 = _smooth(self.gr_db, target, block_ms, 3.0 if target > self.gr_db else 60.0)
         g0, g1 = db_to_lin(-self.gr_db), db_to_lin(-gr1)
@@ -725,7 +751,9 @@ class Analyzer:
 
     def __init__(self, fs=SAMPLE_RATE):
         self.fs = fs
-        self.buf = np.zeros(self.NFFT, np.float32)
+        self._ring = np.zeros(2 * self.NFFT, np.float32)
+        self._w = self.NFFT
+        self._win_buf = np.empty(self.NFFT, np.float32)
         self.window = np.hanning(self.NFFT).astype(np.float32)
         edges_hz = np.geomspace(60.0, 18000.0, self.BANDS + 1)
         bins = np.rint(edges_hz / (fs / self.NFFT)).astype(int)
@@ -737,19 +765,45 @@ class Analyzer:
         self.scope = np.zeros(128, np.float32)
         self.norm = self.NFFT / 4.0                         # full-scale sine -> 1.0 after Hann window
 
+    @property
+    def buf(self):
+        return self._ring[self._w - self.NFFT:self._w]
+
+    @buf.setter
+    def buf(self, val):
+        self._ring[self._w - self.NFFT:self._w] = np.asarray(val, np.float32)
+
+    def reset(self):
+        self._ring.fill(0.0)
+        self._w = self.NFFT
+        self.bands.fill(0.0)
+        self.scope.fill(0.0)
+
     def push(self, x):
-        n = len(x)
+        x32 = np.asarray(x, dtype=np.float32)
+        n = len(x32)
+        if n == 0:
+            return
         if n >= self.NFFT:
-            self.buf = x[-self.NFFT:].astype(np.float32)
+            self._ring[:self.NFFT] = x32[-self.NFFT:]
+            self._w = self.NFFT
+        elif self._w + n <= 2 * self.NFFT:
+            self._ring[self._w:self._w + n] = x32
+            self._w += n
         else:
-            self.buf = np.concatenate((self.buf[n:], x.astype(np.float32, copy=False)))
+            keep = self.NFFT - n
+            self._ring[:keep] = self._ring[self._w - keep:self._w]
+            self._ring[keep:self.NFFT] = x32
+            self._w = self.NFFT
 
     def update(self):
-        spec = np.abs(np.fft.rfft(self.buf * self.window)) / self.norm
+        cur = self.buf
+        np.multiply(cur, self.window, out=self._win_buf)
+        spec = np.abs(np.fft.rfft(self._win_buf)) / self.norm
         mx = np.maximum.reduceat(spec[:self.end], self.starts)
         db = 20.0 * np.log10(mx + 1e-9)
         self.bands = np.clip((db - self.DB_MIN) / (self.DB_MAX - self.DB_MIN), 0.0, 1.0).astype(np.float32)
-        self.scope = self.buf[-1024:][::8].copy()
+        self.scope = cur[-1024::8].copy()
 
 
 
@@ -1037,7 +1091,7 @@ class AudioProcessor:
     def _finish(self, x, clipped, t0):
         peak = float(np.max(np.abs(x)))
         self.level_peak = peak
-        self.level_rms = float(np.sqrt(np.mean(x * x)))
+        self.level_rms = math.sqrt(float(np.dot(x, x)) / len(x))
         self.level_db = lin_to_db(peak, -80.0)
         self.clipped = clipped
         if self.viz_active:

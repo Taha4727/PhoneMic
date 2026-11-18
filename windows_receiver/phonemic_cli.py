@@ -48,12 +48,35 @@ FRAME_16K = 160       # 10 ms at 16 kHz
 MASK32 = 0xFFFFFFFF
 SIO_UDP_CONNRESET = 0x9800000C
 
+RAW_TCP_RATES = (48000, 24000, 16000)
+RATE_TO_FRAME_BYTES = {48000: 960, 24000: 480, 16000: 320}
+MAGIC_U32_TO_RATE = {
+    0x504D3031: 48000,  # b"PM01"
+    0x504D3032: 24000,  # b"PM02"
+    0x504D3033: 16000,  # b"PM03"
+}
+MAGIC_BYTES_TO_RATE = {b"PM01": 48000, b"PM02": 24000, b"PM03": 16000}
+MAX_TCP_ACCUM_BYTES = 65536
+TCP_HEADER_PEEK_CAP = 1936
+MAX_TCP_CLIENTS = 8
+
 try:
     import numpy as np
     _NP_ERR = ""
 except ImportError as _e:
     np = None
     _NP_ERR = str(_e)
+
+if np is not None:
+    _INV_I16 = np.float32(1.0 / 32768.0)
+    _EMPTY_F32 = np.zeros(0, dtype=np.float32)
+    _EMPTY_F32.setflags(write=False)
+    _ZERO_FRAME = np.zeros(FRAME_48K, dtype=np.float32)
+    _ZERO_FRAME.setflags(write=False)
+else:
+    _INV_I16 = 1.0 / 32768.0
+    _EMPTY_F32 = None
+    _ZERO_FRAME = None
 
 try:
     import sounddevice as sd
@@ -142,11 +165,12 @@ def upsample_2x(x: np.ndarray) -> np.ndarray:
     """Upsample 24 kHz float32 samples to 48 kHz using linear interpolation."""
     n = len(x)
     if n == 0:
-        return np.zeros(0, dtype=np.float32)
+        return _EMPTY_F32 if _EMPTY_F32 is not None else np.zeros(0, dtype=np.float32)
     out = np.empty(n * 2, dtype=np.float32)
     out[0::2] = x
-    x_next = np.append(x[1:], x[-1])
-    out[1::2] = (x + x_next) * 0.5
+    if n > 1:
+        out[1:-1:2] = (x[:-1] + x[1:]) * np.float32(0.5)
+    out[-1] = x[-1]
     return out
 
 
@@ -154,13 +178,195 @@ def upsample_3x(x: np.ndarray) -> np.ndarray:
     """Upsample 16 kHz float32 samples to 48 kHz using linear interpolation."""
     n = len(x)
     if n == 0:
-        return np.zeros(0, dtype=np.float32)
+        return _EMPTY_F32 if _EMPTY_F32 is not None else np.zeros(0, dtype=np.float32)
     out = np.empty(n * 3, dtype=np.float32)
-    x_next = np.append(x[1:], x[-1])
     out[0::3] = x
-    out[1::3] = x * (2.0 / 3.0) + x_next * (1.0 / 3.0)
-    out[2::3] = x * (1.0 / 3.0) + x_next * (2.0 / 3.0)
+    if n > 1:
+        out[1:-2:3] = x[:-1] * np.float32(2.0 / 3.0) + x[1:] * np.float32(1.0 / 3.0)
+        out[2:-1:3] = x[:-1] * np.float32(1.0 / 3.0) + x[1:] * np.float32(2.0 / 3.0)
+    out[-2] = x[-1]
+    out[-1] = x[-1]
     return out
+
+
+# -----------------------------------------------------------------------------
+# Wire Parser (Raw 48k/24k/16k PCM + Compat Framed PM01/PM02/PM03) & Ring Buffer
+# -----------------------------------------------------------------------------
+class _CliTcpStreamParser:
+    """Standalone stateful TCP parser preserving raw PCM across 48k/24k/16k
+    plus strict byte-0 dual-header compat detection for PM01/PM02/PM03 streams.
+    """
+
+    def __init__(self, default_rate: int = 48000):
+        rate = int(default_rate) if default_rate in RATE_TO_FRAME_BYTES else 48000
+        self.default_rate = rate
+        self.sample_rate = rate
+        self.frame_bytes = RATE_TO_FRAME_BYTES[rate]
+        self.mode = "unknown"       # "unknown" -> "raw" | "framed"
+        self.acc = bytearray()
+        self.pos = 0
+
+    @property
+    def buffered_bytes(self) -> int:
+        return len(self.acc) - self.pos
+
+    def feed(self, chunk):
+        if not chunk:
+            return []
+        if self.buffered_bytes + len(chunk) > MAX_TCP_ACCUM_BYTES:
+            raise BufferError(f"TCP accumulator exceeded {MAX_TCP_ACCUM_BYTES} bytes")
+
+        self.acc.extend(chunk)
+        frames = []
+
+        if self.mode == "unknown":
+            self._detect_mode()
+
+        if self.mode == "raw":
+            fb = self.frame_bytes
+            sr = self.sample_rate
+            mv = memoryview(self.acc)
+            try:
+                while (len(self.acc) - self.pos) >= fb:
+                    end = self.pos + fb
+                    frames.append((-1, bytes(mv[self.pos:end]), sr))
+                    self.pos = end
+            finally:
+                mv.release()
+        elif self.mode == "framed":
+            mv = memoryview(self.acc)
+            try:
+                while (len(self.acc) - self.pos) >= 8:
+                    magic_u32, seq = struct.unpack_from(">II", self.acc, self.pos)
+                    sr = MAGIC_U32_TO_RATE.get(magic_u32)
+                    if sr is None:
+                        raise ValueError("Invalid magic inside framed TCP stream")
+                    fb = RATE_TO_FRAME_BYTES[sr]
+                    if (len(self.acc) - self.pos) < 8 + fb:
+                        break
+                    start = self.pos + 8
+                    end = start + fb
+                    self.sample_rate = sr
+                    self.frame_bytes = fb
+                    frames.append((seq, bytes(mv[start:end]), sr))
+                    self.pos = end
+            finally:
+                mv.release()
+
+        if self.pos > 0:
+            if self.pos >= len(self.acc):
+                self.acc.clear()
+            else:
+                del self.acc[:self.pos]
+            self.pos = 0
+
+        if len(self.acc) > MAX_TCP_ACCUM_BYTES:
+            raise BufferError(f"TCP accumulator exceeded {MAX_TCP_ACCUM_BYTES} bytes")
+        return frames
+
+    def _detect_mode(self):
+        avail = len(self.acc) - self.pos
+        if avail < 4:
+            return
+        mv = memoryview(self.acc)
+        try:
+            head0 = bytes(mv[self.pos:self.pos + 4])
+            sr0 = MAGIC_BYTES_TO_RATE.get(head0)
+            if sr0 is None:
+                self.mode = "raw"
+                self.sample_rate = self.default_rate
+                self.frame_bytes = RATE_TO_FRAME_BYTES[self.default_rate]
+                return
+            fb0 = RATE_TO_FRAME_BYTES[sr0]
+            need = 8 + fb0 + 8
+            if avail < need:
+                if avail >= TCP_HEADER_PEEK_CAP:
+                    self.mode = "raw"
+                    self.sample_rate = self.default_rate
+                    self.frame_bytes = RATE_TO_FRAME_BYTES[self.default_rate]
+                return
+            seq0 = struct.unpack_from(">I", self.acc, self.pos + 4)[0]
+            head1_off = self.pos + 8 + fb0
+            head1 = bytes(mv[head1_off:head1_off + 4])
+            seq1 = struct.unpack_from(">I", self.acc, head1_off + 4)[0]
+            if head1 == head0 and seq0 <= 16 and seq1 == ((seq0 + 1) & MASK32):
+                self.mode = "framed"
+                self.sample_rate = sr0
+                self.frame_bytes = fb0
+            else:
+                self.mode = "raw"
+                self.sample_rate = self.default_rate
+                self.frame_bytes = RATE_TO_FRAME_BYTES[self.default_rate]
+        finally:
+            mv.release()
+
+
+class Ring:
+    """Lock-isolated float32 circular ring buffer for PortAudio callbacks."""
+
+    def __init__(self, capacity: int = FRAME_48K * 40):
+        self.cap = max(FRAME_48K, int(capacity))
+        self.buf = np.zeros(self.cap, dtype=np.float32) if np is not None else None
+        self.r = 0
+        self.w = 0
+        self.avail = 0
+        self.drops = 0
+        self.underruns = 0
+        self.lock = threading.Lock()
+
+    def clear(self):
+        with self.lock:
+            self.r = 0
+            self.w = 0
+            self.avail = 0
+
+    def write(self, samples: np.ndarray):
+        x = np.asarray(samples, dtype=np.float32)
+        n = len(x)
+        if n == 0 or self.buf is None:
+            return
+        with self.lock:
+            if n > self.cap:
+                x = x[-self.cap:]
+                n = self.cap
+            overflow = (self.avail + n) - self.cap
+            if overflow > 0:
+                self.r = (self.r + overflow) % self.cap
+                self.avail -= overflow
+                self.drops += 1
+            first = min(n, self.cap - self.w)
+            self.buf[self.w:self.w + first] = x[:first]
+            rem = n - first
+            if rem:
+                self.buf[:rem] = x[first:]
+            self.w = (self.w + n) % self.cap
+            self.avail += n
+
+    def read_into(self, out_1d: np.ndarray) -> int:
+        n = len(out_1d)
+        if n == 0:
+            return 0
+        if self.buf is None:
+            out_1d.fill(0.0)
+            return 0
+        with self.lock:
+            take = min(n, self.avail)
+            if take > 0:
+                first = min(take, self.cap - self.r)
+                out_1d[:first] = self.buf[self.r:self.r + first]
+                rem = take - first
+                if rem:
+                    out_1d[first:take] = self.buf[:rem]
+                self.r = (self.r + take) % self.cap
+                self.avail -= take
+            if take < n:
+                out_1d[take:].fill(0.0)
+                self.underruns += 1
+            return take
+
+    def available(self) -> int:
+        with self.lock:
+            return self.avail
 
 
 # -----------------------------------------------------------------------------
@@ -175,7 +381,7 @@ class ClientStream:
         self.queue = deque(maxlen=30)
         self.target_packets = target_packets
         self.connected_at = time.monotonic()
-        self.last_seen = time.monotonic()
+        self.last_seen = self.connected_at
         self.packet_count = 0
         self.bytes_count = 0
         self.last_seq = -1
@@ -186,7 +392,7 @@ class ClientStream:
 
         # Bandwidth calculation (sliding 1-sec window)
         self.rate_bytes = 0
-        self.last_rate_calc = time.monotonic()
+        self.last_rate_calc = self.connected_at
         self.kbps = 0.0
 
     def push(self, pcm_bytes: bytes, sample_rate: int, seq: int = -1):
@@ -219,18 +425,19 @@ class ClientStream:
 
     def pop_48k(self) -> np.ndarray:
         if self.buffering:
-            return np.zeros(FRAME_48K, dtype=np.float32)
+            return _ZERO_FRAME
         if not self.queue:
             self.buffering = True
             self.current_peak = 0.0
             self.current_db = -60.0
-            return np.zeros(FRAME_48K, dtype=np.float32)
+            return _ZERO_FRAME
 
         pcm = self.queue.popleft()
         even_len = len(pcm) & ~1
         if even_len < 2:
-            return np.zeros(FRAME_48K, dtype=np.float32)
-        raw = np.frombuffer(pcm[:even_len], dtype="<i2").astype(np.float32) * (1.0 / 32768.0)
+            return _ZERO_FRAME
+        raw = np.frombuffer(pcm[:even_len], dtype="<i2").astype(np.float32)
+        raw *= _INV_I16
 
         # Upsample to 48k master clock if sender is 24k or 16k
         if self.sample_rate == 24000:
@@ -241,13 +448,15 @@ class ClientStream:
             samples = raw
 
         if len(samples) < FRAME_48K:
-            samples = np.pad(samples, (0, FRAME_48K - len(samples)))
+            padded = np.zeros(FRAME_48K, dtype=np.float32)
+            padded[:len(samples)] = samples
+            samples = padded
         elif len(samples) > FRAME_48K:
             samples = samples[:FRAME_48K]
 
         peak = float(np.max(np.abs(samples)))
         self.current_peak = peak
-        self.current_db = 20.0 * np.log10(peak) if peak > 1e-4 else -60.0
+        self.current_db = 20.0 * float(np.log10(peak)) if peak > 1e-4 else -60.0
         return samples
 
     @property
@@ -267,26 +476,48 @@ class ClientStream:
 # Main CLI Receiver Engine
 # -----------------------------------------------------------------------------
 class CliReceiver:
-    def __init__(self, port=DEFAULT_PORT, device_name=None, monitor_device=None, mix_mode="sum", use_tcp=False):
+    def __init__(self, port=DEFAULT_PORT, device_name=None, monitor_device=None, mix_mode="sum",
+                 use_tcp=False, raw_tcp_rate=48000):
         self.port = port
         self.device_name = device_name
         self.monitor_device_name = monitor_device
         self.mix_mode = mix_mode    # "sum" or "duck"
         self.use_tcp = use_tcp
+        self.raw_tcp_rate = int(raw_tcp_rate) if raw_tcp_rate in RAW_TCP_RATES else 48000
         self.running = False
         self.muted = False
         self.gain_db = 0.0
         self.monitoring = False
         self.show_details = True
 
-        self.lock = threading.Lock()
-        self.clients = {}  # addr -> ClientStream
+        # Strictly lock-split state:
+        # - clients_lock ONLY protects self.clients and client telemetry (NEVER acquired in callbacks)
+        # - main_ring / monitor_ring each own an internal fixed-memcpy Ring.lock
+        self.clients_lock = threading.Lock()
+        self.lock = self.clients_lock   # legacy alias; never used by audio callbacks
+        self.clients = {}               # addr -> ClientStream
 
-        # Ringbuffers for audio outputs
-        self.main_ring = deque(maxlen=40)
-        self.monitor_ring = deque(maxlen=40)
+        # Lock-isolated float32 circular ring buffers for audio outputs
+        self.main_ring = Ring(FRAME_48K * 40)
+        self.monitor_ring = Ring(FRAME_48K * 40)
         self.master_peak = 0.0
         self.master_db = -60.0
+
+        # Wakeup & callback diagnostics (audio callbacks never call Event.set())
+        self._wake_event = threading.Event()
+        self._cb_epoch = 0
+        self._mix_sum = np.empty(FRAME_48K, dtype=np.float32) if np is not None else None
+
+        # Thread / socket tracking for deterministic shutdown
+        self._tcp_lock = threading.Lock()
+        self._tcp_conns = set()
+        self._tcp_threads = []
+        self._net_thread = None
+        self._mixer_thread = None
+        self._udp_sock = None
+        self._tcp_server = None
+        self._ip_cache = {}
+        self._bind_error = ""
 
         # Output Streams
         self.main_stream = None
@@ -294,24 +525,57 @@ class CliReceiver:
         self.main_dev_info = "None"
         self.monitor_dev_info = "None"
 
-    def start(self):
+    def start(self, interactive=True):
         self.running = True
         self._start_main_audio()
-        if self.monitor_device_name:
+        if self.monitor_device_name or self.monitoring:
             self._start_monitor_audio()
 
-        if self.use_tcp:
-            t = threading.Thread(target=self._tcp_loop, daemon=True)
-        else:
-            t = threading.Thread(target=self._udp_loop, daemon=True)
-        t.start()
+        target = self._tcp_loop if self.use_tcp else self._udp_loop
+        self._net_thread = threading.Thread(target=target, name="PM-CLI-Net", daemon=True)
+        self._net_thread.start()
 
-        # Engine mixer thread
-        m = threading.Thread(target=self._mixer_loop, daemon=True)
-        m.start()
+        self._mixer_thread = threading.Thread(target=self._mixer_loop, name="PM-CLI-Mix", daemon=True)
+        self._mixer_thread.start()
 
-        # Interactive Terminal UI loop
-        self._interactive_ui_loop()
+        if interactive:
+            self._interactive_ui_loop()
+
+    def stop(self):
+        self.running = False
+        self._wake_event.set()
+        for sock_attr in ("_udp_sock", "_tcp_server"):
+            s = getattr(self, sock_attr, None)
+            if s is not None:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+                setattr(self, sock_attr, None)
+        with self._tcp_lock:
+            conns = list(self._tcp_conns)
+            self._tcp_conns.clear()
+            tcp_threads = list(self._tcp_threads)
+            self._tcp_threads.clear()
+        for c in conns:
+            try:
+                c.close()
+            except Exception:
+                pass
+        for t in (self._net_thread, self._mixer_thread, *tcp_threads):
+            if t is not None and t.is_alive() and t is not threading.current_thread():
+                t.join(timeout=1.5)
+        self._net_thread = None
+        self._mixer_thread = None
+        for stream_attr in ("main_stream", "monitor_stream"):
+            st = getattr(self, stream_attr, None)
+            if st is not None:
+                try:
+                    st.stop()
+                    st.close()
+                except Exception:
+                    pass
+                setattr(self, stream_attr, None)
 
     # -- Device Resolution & Audio Streams -------------------------------------
     def _find_device_idx(self, query=None, prefer_cable=True, prefer_headphones=False):
@@ -397,6 +661,7 @@ class CliReceiver:
     def toggle_monitoring(self):
         if self.monitoring:
             self.monitoring = False
+            self.monitor_ring.clear()
             if self.monitor_stream:
                 try:
                     self.monitor_stream.stop()
@@ -409,26 +674,47 @@ class CliReceiver:
             return self._start_monitor_audio()
 
     def _main_audio_callback(self, outdata, frames, time_info, status):
+        """Real-time audio callback: never acquires clients_lock and never calls Event.set()."""
         try:
-            with self.lock:
-                if self.main_ring and not self.muted:
-                    block = self.main_ring.popleft()
-                else:
-                    block = np.zeros(frames, dtype=np.float32)
-            outdata[:, 0] = block
+            if self.muted:
+                outdata.fill(0.0)
+            else:
+                self.main_ring.read_into(outdata[:, 0])
+            self._cb_epoch += 1
         except Exception:
-            outdata.fill(0)
+            outdata.fill(0.0)
 
     def _monitor_audio_callback(self, outdata, frames, time_info, status):
+        """Real-time monitor callback: never acquires clients_lock and never calls Event.set()."""
         try:
-            with self.lock:
-                if self.monitor_ring and self.monitoring and not self.muted:
-                    block = self.monitor_ring.popleft()
-                else:
-                    block = np.zeros(frames, dtype=np.float32)
-            outdata[:, 0] = block
+            if not self.monitoring or self.muted:
+                outdata.fill(0.0)
+            else:
+                self.monitor_ring.read_into(outdata[:, 0])
         except Exception:
-            outdata.fill(0)
+            outdata.fill(0.0)
+
+    # -- Discovery Subnet Cache ------------------------------------------------
+    def _reply_for_remote(self, remote_ip: str) -> bytes:
+        cached = self._ip_cache.get(remote_ip)
+        if cached is not None:
+            return cached
+        local_ip = "127.0.0.1"
+        try:
+            s_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s_probe.connect((remote_ip, self.port))
+            local_ip = s_probe.getsockname()[0]
+            s_probe.close()
+        except Exception:
+            try:
+                local_ip = socket.gethostbyname(socket.gethostname())
+            except Exception:
+                pass
+        reply = DISCOVERY_REPLY + f" {VERSION} {local_ip}".encode("ascii")
+        if len(self._ip_cache) >= 64:
+            self._ip_cache.clear()
+        self._ip_cache[remote_ip] = reply
+        return reply
 
     # -- UDP Network Loop ------------------------------------------------------
     def _udp_loop(self):
@@ -450,20 +736,28 @@ class CliReceiver:
             sock.bind(("0.0.0.0", self.port))
             sock.settimeout(0.5)
         except Exception as e:
+            self._bind_error = str(e)
             print(f"\n[Error] Cannot bind UDP port {self.port}: {e}", file=sys.stderr)
             self.running = False
+            self._wake_event.set()
             try:
                 sock.close()
             except Exception:
                 pass
             return
 
+        self._udp_sock = sock
         buf = bytearray(4096)
+        mv = memoryview(buf)
         try:
             while self.running:
                 try:
                     n, addr = sock.recvfrom_into(buf)
                 except socket.timeout:
+                    continue
+                except OSError:
+                    if not self.running:
+                        break
                     continue
                 except Exception:
                     continue
@@ -471,43 +765,32 @@ class CliReceiver:
                 if n < 4:
                     continue
 
-                head = bytes(buf[:min(n, 32)])
-                # Auto-discovery probe
-                if head.startswith((b"PMD", DISCOVERY_PROBE)) or b"PMD0" in head or DISCOVERY_PROBE in head:
-                    # Resolve real local interface IP for sender's subnet
-                    local_ip = "127.0.0.1"
-                    try:
-                        s_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                        s_probe.connect((addr[0], addr[1] if addr[1] > 0 else self.port))
-                        local_ip = s_probe.getsockname()[0]
-                        s_probe.close()
-                    except Exception:
-                        try:
-                            local_ip = socket.gethostbyname(socket.gethostname())
-                        except Exception:
-                            pass
-                    try:
-                        sock.sendto(DISCOVERY_REPLY + f" {VERSION} {local_ip}".encode("ascii"), addr)
-                    except OSError:
-                        pass
-                    continue
-
-                # Packet headers:
-                # PM01 -> 48 kHz 16-bit
-                # PM02 -> 24 kHz 16-bit
-                # PM03 -> 16 kHz 16-bit
-                magic = bytes(buf[:4])
-                if magic in (b"PM01", b"PM02", b"PM03") and n >= 8:
-                    sr = 48000 if magic == b"PM01" else (24000 if magic == b"PM02" else 16000)
+                magic_u32 = struct.unpack_from(">I", buf, 0)[0]
+                sr = MAGIC_U32_TO_RATE.get(magic_u32)
+                if sr is not None and n >= 8:
                     seq = struct.unpack_from(">I", buf, 4)[0]
                     pcm_len = (n - 8) & ~1
                     if pcm_len >= 2:
-                        pcm = bytes(buf[8:8 + pcm_len])
-                        self._on_client_packet(addr, pcm, sr, seq)
-                elif n >= 320 and n % 2 == 0:
+                        self._on_client_packet(addr, bytes(mv[8:8 + pcm_len]), sr, seq)
+                    continue
+
+                # Auto-discovery probe (PMD0 or PM_DISCOVER)
+                if n >= 4:
+                    head = bytes(mv[:min(n, 32)])
+                    if (magic_u32 == 0x504D4430 or magic_u32 == 0x504D5F44
+                            or head.startswith((b"PMD", DISCOVERY_PROBE))
+                            or b"PMD0" in head or DISCOVERY_PROBE in head):
+                        try:
+                            sock.sendto(self._reply_for_remote(addr[0]), addr)
+                        except OSError:
+                            pass
+                        continue
+                if n >= 320 and (n & 1) == 0:
                     # Raw PCM fallback
-                    self._on_client_packet(addr, bytes(buf[:n]), 48000, -1)
+                    self._on_client_packet(addr, bytes(mv[:n]), 48000, -1)
         finally:
+            mv.release()
+            self._udp_sock = None
             try:
                 sock.close()
             except Exception:
@@ -522,44 +805,54 @@ class CliReceiver:
             pass
         try:
             server.bind(("0.0.0.0", self.port))
-            server.listen(4)
+            server.listen(MAX_TCP_CLIENTS)
             server.settimeout(0.5)
         except Exception as e:
+            self._bind_error = str(e)
             print(f"\n[Error] Cannot bind TCP port {self.port}: {e}", file=sys.stderr)
             self.running = False
+            self._wake_event.set()
             try:
                 server.close()
             except Exception:
                 pass
             return
 
-        active_tcp_clients = []
+        self._tcp_server = server
         try:
             while self.running:
                 try:
                     conn, addr = server.accept()
                 except socket.timeout:
                     continue
-                except Exception:
+                except OSError:
                     break
-                # Cap concurrent TCP connections to 8
-                active_tcp_clients = [t for t in active_tcp_clients if t.is_alive()]
-                if len(active_tcp_clients) >= 8:
-                    conn.close()
-                    continue
-                t = threading.Thread(target=self._handle_tcp_client, args=(conn, addr), daemon=True)
-                active_tcp_clients.append(t)
-                t.start()
+                with self._tcp_lock:
+                    self._tcp_threads = [t for t in self._tcp_threads if t.is_alive()]
+                    if len(self._tcp_threads) >= MAX_TCP_CLIENTS:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        continue
+                    self._tcp_conns.add(conn)
+                    t = threading.Thread(target=self._handle_tcp_client, args=(conn, addr), name=f"PM-CLI-TCP-{addr[1]}", daemon=True)
+                    self._tcp_threads.append(t)
+                    t.start()
         finally:
+            self._tcp_server = None
             try:
                 server.close()
             except Exception:
                 pass
 
     def _handle_tcp_client(self, conn, addr):
-        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        try:
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
         conn.settimeout(2.0)
-        acc = bytearray()
+        parser = _CliTcpStreamParser(default_rate=self.raw_tcp_rate)
         try:
             while self.running:
                 try:
@@ -568,14 +861,13 @@ class CliReceiver:
                     continue
                 if not chunk:
                     break
-                acc.extend(chunk)
-                while len(acc) >= 960:
-                    pcm = bytes(acc[:960])
-                    del acc[:960]
-                    self._on_client_packet(addr, pcm, 48000, -1)
+                for seq, pcm, sr in parser.feed(chunk):
+                    self._on_client_packet(addr, pcm, sr, seq)
         except Exception:
             pass
         finally:
+            with self._tcp_lock:
+                self._tcp_conns.discard(conn)
             try:
                 conn.close()
             except Exception:
@@ -583,11 +875,11 @@ class CliReceiver:
 
     def _on_client_packet(self, addr, pcm, sample_rate, seq):
         now = time.monotonic()
-        with self.lock:
+        with self.clients_lock:
             client = self.clients.get(addr)
             if client is None:
-                # Cap clients collection at 8 to prevent memory exhaustion
-                if len(self.clients) >= 8:
+                # Cap clients collection at MAX_TCP_CLIENTS to prevent memory exhaustion
+                if len(self.clients) >= MAX_TCP_CLIENTS:
                     oldest_addr = min(self.clients.keys(), key=lambda a: self.clients[a].last_seen)
                     if (now - self.clients[oldest_addr].last_seen) > 1.0:
                         del self.clients[oldest_addr]
@@ -596,58 +888,81 @@ class CliReceiver:
                 client = ClientStream(addr, sample_rate)
                 self.clients[addr] = client
             client.push(pcm, sample_rate, seq)
+        self._wake_event.set()
 
     # -- Mixer Engine ----------------------------------------------------------
     def _mixer_loop(self):
         next_tick = time.monotonic()
         while self.running:
             now = time.monotonic()
-            if now < next_tick:
-                time.sleep(max(0.001, next_tick - now))
-            next_tick += 0.010  # 10 ms per 480-sample block
+            rem = next_tick - now
+            if rem > 0.001:
+                # Clear before waiting and bound sleep by <= 10ms monotonic fallback so lost wakeups never stall audio.
+                self._wake_event.clear()
+                self._wake_event.wait(timeout=min(0.010, rem))
+                now = time.monotonic()
+            # Guard against unbounded catch-up bursts after OS suspend/debugger pause
+            if now - next_tick > 0.050:
+                next_tick = now + 0.010
+            else:
+                next_tick += 0.010  # 10 ms per 480-sample block
 
             # Prune dead clients (inactive > 3.0s)
-            with self.lock:
+            with self.clients_lock:
                 dead = [a for a, c in self.clients.items() if (now - c.last_seen) > 3.0]
                 for d in dead:
                     del self.clients[d]
-
                 active = list(self.clients.values())
 
             if not active:
-                mixed = np.zeros(FRAME_48K, dtype=np.float32)
-            elif len(active) == 1:
+                self.master_peak = 0.0
+                self.master_db = -60.0
+                self.main_ring.write(_ZERO_FRAME)
+                if self.monitoring:
+                    self.monitor_ring.write(_ZERO_FRAME)
+                continue
+
+            if len(active) == 1:
                 mixed = active[0].pop_48k()
+                if abs(self.gain_db) > 0.01:
+                    scale = np.float32(10.0 ** (self.gain_db / 20.0))
+                    np.multiply(mixed, scale, out=self._mix_sum)
+                    np.clip(self._mix_sum, -1.0, 1.0, out=self._mix_sum)
+                    mixed = self._mix_sum
             else:
-                # Multiple devices connected!
                 blocks = [c.pop_48k() for c in active]
+                summed = self._mix_sum
+                summed.fill(0.0)
                 if self.mix_mode == "duck":
-                    # Auto-ducking: find loudest speaker, duck others by -12 dB / 75% (0.25x weight)
-                    powers = [float(np.mean(b ** 2)) for b in blocks]
+                    # Auto-ducking: find loudest speaker, duck others by -12 dB (0.25x weight)
+                    powers = [float(np.dot(b, b)) / FRAME_48K for b in blocks]
                     max_idx = int(np.argmax(powers))
-                    summed = np.zeros(FRAME_48K, dtype=np.float32)
+                    peak_pow = powers[max_idx]
                     for idx, b in enumerate(blocks):
-                        weight = 1.0 if idx == max_idx or powers[max_idx] < 1e-4 else 0.25
-                        summed += b * weight
-                    mixed = np.tanh(summed * 1.1)  # Soft limiter
+                        if idx == max_idx or peak_pow < 1e-4:
+                            summed += b
+                        else:
+                            summed += b * np.float32(0.25)
+                    summed *= np.float32(1.1)
+                    np.tanh(summed, out=summed)
                 else:
                     # Sum & Soft-Knee Limiter
-                    summed = np.sum(blocks, axis=0)
-                    mixed = np.tanh(summed)  # Soft non-linear saturation prevents clipping
+                    for b in blocks:
+                        summed += b
+                    np.tanh(summed, out=summed)
 
-            # Apply gain adjustment
-            if abs(self.gain_db) > 0.01:
-                scale = 10.0 ** (self.gain_db / 20.0)
-                mixed = np.clip(mixed * scale, -1.0, 1.0)
+                if abs(self.gain_db) > 0.01:
+                    summed *= np.float32(10.0 ** (self.gain_db / 20.0))
+                    np.clip(summed, -1.0, 1.0, out=summed)
+                mixed = summed
 
             peak = float(np.max(np.abs(mixed)))
             self.master_peak = peak
-            self.master_db = 20.0 * np.log10(peak) if peak > 1e-4 else -60.0
+            self.master_db = 20.0 * float(np.log10(peak)) if peak > 1e-4 else -60.0
 
-            with self.lock:
-                self.main_ring.append(mixed)
-                if self.monitoring:
-                    self.monitor_ring.append(mixed)
+            self.main_ring.write(mixed)
+            if self.monitoring:
+                self.monitor_ring.write(mixed)
 
     # -- Interactive Terminal UI & Keybindings ---------------------------------
     def _interactive_ui_loop(self):
@@ -696,7 +1011,7 @@ class CliReceiver:
                             status_msg = "[0] Master Gain Reset: 0.0 dB"
                             status_until = now + 2.0
                         elif key == "C":
-                            with self.lock:
+                            with self.clients_lock:
                                 for c in self.clients.values():
                                     c.packet_count = 0
                                     c.lost_packets = 0
@@ -708,13 +1023,12 @@ class CliReceiver:
                             os.system("cls" if os.name == "nt" else "clear")
 
                     now = time.monotonic()
-                    with self.lock:
+                    with self.clients_lock:
                         clients_list = list(self.clients.values())
-                        m_db = self.master_db
-                        m_peak = self.master_peak
-                        is_muted = self.muted
-                        mon_active = self.monitoring
-                        gain = self.gain_db
+                    m_db = self.master_db
+                    is_muted = self.muted
+                    mon_active = self.monitoring
+                    gain = self.gain_db
 
                     # Build UI Output
                     lines = []
@@ -772,19 +1086,7 @@ class CliReceiver:
                 pass
             finally:
                 print("\n\n[*] Shutting down PhoneMic CLI Receiver...")
-                self.running = False
-                if self.main_stream:
-                    try:
-                        self.main_stream.stop()
-                        self.main_stream.close()
-                    except Exception:
-                        pass
-                if self.monitor_stream:
-                    try:
-                        self.monitor_stream.stop()
-                        self.monitor_stream.close()
-                    except Exception:
-                        pass
+                self.stop()
                 print("[*] Goodbye!")
 
 
@@ -806,6 +1108,8 @@ def main():
     parser.add_argument("--monitor-device", type=str, default=None, help="Name of monitor headphone device")
     parser.add_argument("--monitor", action="store_true", help="Start with audio monitoring enabled immediately")
     parser.add_argument("--tcp", action="store_true", help="Use TCP transport instead of UDP")
+    parser.add_argument("--tcp-rate", type=int, choices=list(RAW_TCP_RATES), default=48000,
+                        help="Sample rate for unframed raw TCP streams (48000, 24000, or 16000; default 48000)")
     parser.add_argument("--list-devices", action="store_true", help="List audio output devices and exit")
     parser.add_argument("-V", "--version", action="store_true", help="Print version and exit")
     args = parser.parse_args()
@@ -833,7 +1137,8 @@ def main():
         device_name=args.device,
         monitor_device=args.monitor_device,
         mix_mode=args.mix_mode,
-        use_tcp=args.tcp
+        use_tcp=args.tcp,
+        raw_tcp_rate=args.tcp_rate,
     )
     if args.monitor:
         rx.monitoring = True

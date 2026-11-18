@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "description": "Independent golden wire-protocol fixtures matching PhoneMicService.kt and ReceiverDiscovery.kt.",
+  "constants": {
+    "default_port": 5001,
+    "magics": {
+      "48000": "504d3031",
+      "24000": "504d3032",
+      "16000": "504d3033"
+    },
+    "discovery_probe_short": "504d4430",
+    "discovery_probe_long": "504d5f444953434f564552",
+    "discovery_reply_prefix": "504d413120",
+    "cmd_pause": "504d5031",
+    "cmd_resume": "504d5231"
+  },
+  "tone_6khz_48k_period16b_hex": "0000271b6626271b0000d9e49ad9d9e4",
+  "udp_cases": [
+    {
+      "name": "udp_pm01_48k_seq0",
+      "magic_hex": "504d3031",
+      "seq": 0,
+      "seq_be_hex": "00000000",
+      "sample_rate": 48000,
+      "samples": 480,
+      "pcm_repeat_period_hex": "0000271b6626271b0000d9e49ad9d9e4",
+      "pcm_repeat_count": 60
+    },
+    {
+      "name": "udp_pm02_24k_seq1",
+      "magic_hex": "504d3032",
+      "seq": 1,
+      "seq_be_hex": "00000001",
+      "sample_rate": 24000,
+      "samples": 240,
+      "pcm_repeat_period_hex": "0000271b6626271b0000d9e49ad9d9e4",
+      "pcm_repeat_count": 30
+    },
+    {
+      "name": "udp_pm03_16k_seq2",
+      "magic_hex": "504d3033",
+      "seq": 2,
+      "seq_be_hex": "00000002",
+      "sample_rate": 16000,
+      "samples": 160,
+      "pcm_repeat_period_hex": "0000271b6626271b0000d9e49ad9d9e4",
+      "pcm_repeat_count": 20
+    },
+    {
+      "name": "udp_pm01_wrap_fffffffe",
+      "magic_hex": "504d3031",
+      "seq": 4294967294,
+      "seq_be_hex": "fffffffe",
+      "sample_rate": 48000,
+      "samples": 480,
+      "pcm_repeat_period_hex": "0000271b6626271b0000d9e49ad9d9e4",
+      "pcm_repeat_count": 60
+    },
+    {
+      "name": "udp_pm01_wrap_ffffffff",
+      "magic_hex": "504d3031",
+      "seq": 4294967295,
+      "seq_be_hex": "ffffffff",
+      "sample_rate": 48000,
+      "samples": 480,
+      "pcm_repeat_period_hex": "0000271b6626271b0000d9e49ad9d9e4",
+      "pcm_repeat_count": 60
+    },
+    {
+      "name": "udp_pm01_wrap_00000000",
+      "magic_hex": "504d3031",
+      "seq": 0,
+      "seq_be_hex": "00000000",
+      "sample_rate": 48000,
+      "samples": 480,
+      "pcm_repeat_period_hex": "0000271b6626271b0000d9e49ad9d9e4",
+      "pcm_repeat_count": 60
+    },
+    {
+      "name": "udp_pm01_wrap_00000001",
+      "magic_hex": "504d3031",
+      "seq": 1,
+      "seq_be_hex": "00000001",
+      "sample_rate": 48000,
+      "samples": 480,
+      "pcm_repeat_period_hex": "0000271b6626271b0000d9e49ad9d9e4",
+      "pcm_repeat_count": 60
+    }
+  ],
+  "malformed_udp_cases": [
+    {"name": "too_short_3b", "raw_hex": "504d30"},
+    {"name": "header_only_8b", "raw_hex": "504d303100000001"},
+    {"name": "header_plus_1b_odd", "raw_hex": "504d3031000000017f"},
+    {"name": "header_plus_odd_pcm", "raw_hex": "504d3031000000050000271bff"},
+    {"name": "odd_raw_no_header", "raw_hex": "0001020304"}
+  ],
+  "tcp_raw_rates": [
+    {"sample_rate": 48000, "frame_bytes": 960, "chunk_splits": [1, 13, 501, 445, 959, 961]},
+    {"sample_rate": 24000, "frame_bytes": 480, "chunk_splits": [1, 7, 250, 222, 480, 481]},
+    {"sample_rate": 16000, "frame_bytes": 320, "chunk_splits": [3, 19, 298, 320, 640]}
+  ]
+}

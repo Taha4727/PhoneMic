@@ -75,7 +75,7 @@ def test_stated_numbers_match_the_engine():
     assert abs(dsp.SpectralDenoiser(hop=480).delay_ms - 10.0) < 1e-9 and abs(dsp.SpectralDenoiser(hop=240).delay_ms - 5.0) < 1e-9
     assert sm.BY_KEY["noise_quality"].choices[0][1].endswith("+10 ms") and sm.BY_KEY["noise_quality"].choices[1][1].endswith("+5 ms")
     vc = dsp.VoiceChanger(); vc.enabled = True; vc.pitch_semitones = 3.0
-    assert vc.latency_ms == 21.0 and "21 ms" in sm.BY_KEY["vc.pitch_semitones"].details
+    assert vc.latency_ms == 15.0 and "15 ms" in sm.BY_KEY["vc.pitch_semitones"].details
     assert "-20 dBFS" in sm.BY_KEY["agc_target_db"].details and dsp.FX_BASE["agc_target_db"] == -20.0
     assert "-40 dB" in sm.BY_KEY["gate_depth_db"].details and dsp.FX_BASE["gate_depth_db"] == -40.0
     assert "80 Hz" in sm.BY_KEY["lowcut_hz"].details and dsp.FX_BASE["lowcut_hz"] == 80.0

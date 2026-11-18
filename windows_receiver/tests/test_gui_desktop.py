@@ -47,6 +47,7 @@ print("   PASS tooltip:", icon.title)
 
 print("2. the Shortcuts card has one capture button per action")
 app.show_page("settings"); page = app.pages["settings"]
+page._pick_tab("shortcuts")
 entries = [w for w in walk(page) if isinstance(w, ui_kit.HotkeyEntry)]
 assert len(entries) == 7 and {e.setting.key for e in entries} == set(ui_kit.HOTKEY_KEYS)
 by_key = {e.setting.key: e for e in entries}

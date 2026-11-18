@@ -29,6 +29,7 @@ DEFAULTS = {
         "lock_client": False,        # allow multiple phones to connect and mix simultaneously (can be toggled in settings)
         "mix_mode": "sum",           # "sum" (Sum & Soft Limiter) | "duck" (Auto-Duck Priority)
         "accept_raw": True,          # accept header-less PCM datagrams
+        "raw_tcp_rate": 48000,       # sample rate for unframed raw TCP PCM (48000 | 24000 | 16000)
         "stream_timeout_s": 1.5,     # silence for this long = "connection lost"
     },
     "audio": {
@@ -179,6 +180,8 @@ class ConfigManager:
             self.data["user_voice_presets"][name] = sanitize_voice(p)
         if self.data["app"].get("accent") == "violet":
             self.data["app"]["accent"] = "blue"
+        if self.data["network"].get("raw_tcp_rate") not in (48000, 24000, 16000):
+            self.data["network"]["raw_tcp_rate"] = 48000
 
     def _migrate(self, saved):
         old_ver = _version_tuple(saved.get("version", "0.0.0"))

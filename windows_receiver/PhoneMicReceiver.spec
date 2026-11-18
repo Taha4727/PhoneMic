@@ -7,22 +7,29 @@ PyInstaller spec for PhoneMic Windows Receiver v1.3.0
                                                               -> dist\PhoneMicReceiver\            (folder, starts instantly)
 """
 import os
+import sys
 from PyInstaller.utils.hooks import collect_all
 
+IS_WIN = sys.platform.startswith("win")
 ONEDIR = os.environ.get("PM_ONEDIR", "") == "1"
 ICON = os.path.join("assets", "phonemic.ico")
 
 datas, binaries = [], []
 hiddenimports = [
-    "customtkinter", "sounddevice", "_sounddevice_data", "numpy", "pystray", "pystray._win32", "PIL", "PIL.Image", "PIL.ImageDraw", "winsound",
+    "customtkinter", "sounddevice", "_sounddevice_data", "numpy", "pystray",
+    "PIL", "PIL.Image", "PIL.ImageDraw",
     "tkinter", "tkinter.ttk", "tkinter.messagebox", "tkinter.filedialog", "_tkinter",
-    "winreg", "wave", "webbrowser",
+    "wave", "webbrowser",
     # the application package (listed explicitly so the lazy imports in gui/launcher are always bundled)
-    "phonemic", "phonemic.const", "phonemic.config", "phonemic.system", "phonemic.dsp", "phonemic.engine",
+    "phonemic", "phonemic.const", "phonemic.wire", "phonemic.config", "phonemic.system", "phonemic.dsp", "phonemic.engine",
     "phonemic.widgets", "phonemic.ui_kit", "phonemic.gui", "phonemic.minimal_gui", "phonemic.pages", "phonemic.wizard", "phonemic.cli", "phonemic.icon",
     "phonemic.bindings", "phonemic.settings_meta", "phonemic.presets_io", "phonemic.hotkeys", "phonemic.tray", "phonemic.cues",
     "phonemic.virtual_mic", "phonemic.selftest", "phonemic.qr", "phonemic.qrcodegen",
 ]
+if IS_WIN:
+    hiddenimports += ["pystray._win32", "winsound", "winreg"]
+else:
+    hiddenimports += ["pystray._xorg", "pystray._appindicator", "pystray._gtk"]
 
 # PortAudio DLL + sounddevice package data + CustomTkinter themes
 for pkg in ("customtkinter", "sounddevice", "_sounddevice_data", "pystray"):
@@ -63,7 +70,7 @@ exe_kwargs = dict(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=ICON if os.path.exists(ICON) else None,
+    icon=ICON if (IS_WIN and os.path.exists(ICON)) else None,
 )
 
 if ONEDIR:

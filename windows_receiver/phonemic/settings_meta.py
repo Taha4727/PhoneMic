@@ -428,6 +428,11 @@ cfg("network.lock_client", "network", "options", "Lock to single phone", "Ignore
 cfg("network.accept_raw", "network", "options", "Accept plain audio packets", "Compatibility with old app versions.",
     "Older versions of the phone app send audio without a header. Leave this on unless the receiver picks up stray network "
     "traffic as noise.", "toggle", advanced=True, short="Accept plain audio packets")
+cfg("network.raw_tcp_rate", "network", "options", "Raw TCP sample rate", "Sample rate assumed for unframed TCP audio streams.",
+    "Older app builds send plain audio over TCP without a header. Pick the rate configured on your phone when streaming "
+    "unframed 24 kHz or 16 kHz audio.", "choice",
+    choices=((48000, "48 kHz (Studio)"), (24000, "24 kHz (Balanced)"), (16000, "16 kHz (Economy)")),
+    advanced=True, short="TCP sample rate", keywords="tcp sample rate 48 24 16 raw")
 
 # ---- settings --------------------------------------------------------------------------------------------------------
 add(key="sys.start_with_windows", target="sys", page="settings", group="general", label="Start at login",

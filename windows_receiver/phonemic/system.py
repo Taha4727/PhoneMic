@@ -477,7 +477,7 @@ def classify_interface(adapter_name, description, ip):
 
 _IPV4_RE = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})")
 _DESC_RE = re.compile(r"^\s*(description|beschreibung|descripci[o\u00f3]n|descrizione|beschrijving|opis)\b", re.I)
-_IP_ADDR_LINE_RE = re.compile(r"^\d+:\s+([^\s:@]+)(?:@[^\s:]+)?\s+inet\s+(\d{1,3}(?:\.\d{1,3}){3})/\d+")
+_IP_ADDR_LINE_RE = re.compile(r"^\d+:\s+([^\s:@]+)(?:@[^\s:]+)?\s+inet\s+(\d{1,3}(?:\.\d{1,3}){3})(?:/\d+|\s)")
 
 
 def parse_ipconfig(text):
@@ -562,7 +562,8 @@ class NetworkInfo:
             if p and p.returncode == 0:
                 found = parse_ipconfig(p.stdout)
         elif IS_LINUX:
-            p = run_silent(["ip", "-o", "-4", "addr", "show"], timeout=3.0)
+            ip_bin = shutil.which("ip") or next((c for c in ("/usr/bin/ip", "/usr/sbin/ip", "/sbin/ip") if os.path.exists(c)), "ip")
+            p = run_silent([ip_bin, "-o", "-4", "addr", "show"], timeout=3.0)
             if p and p.returncode == 0:
                 found = parse_ip_addr(p.stdout)
         known = {i.ip for i in found}
@@ -776,7 +777,15 @@ def _api_rank(api):
         return 2
     if "alsa" in a:
         return 3
-    return 4
+    if "wasapi" in a:
+        return 4
+    if "directsound" in a:
+        return 5
+    if "mme" in a:
+        return 6
+    if "wdm" in a:
+        return 7
+    return 8
 
 
 def _linux_virtual_and_pulse_devices(raw_devs):

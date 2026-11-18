@@ -2,7 +2,7 @@ import os, time, socket, struct, tempfile, random, wave, threading
 import _path  # noqa: F401
 import numpy as np
 import fake_sd
-from phonemic.engine import JitterBuffer, Receiver, OK, PLC, WAIT, Ring
+from phonemic.engine import JitterBuffer, Receiver, OK, PLC, WAIT, Ring, upsample_2x, upsample_3x
 from phonemic.config import ConfigManager
 from phonemic import system
 
@@ -122,5 +122,63 @@ blocker = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); blocker.bind(("0.0.0
 rx.set_port(25022); time.sleep(0.5)
 print("  bind error surfaced:", bool(rx.net.udp_error) or "(Linux allows REUSEADDR sharing; Windows uses EXCLUSIVEADDRUSE)")
 blocker.close(); rx.set_port(25023); time.sleep(0.4); assert rx.net.bind_ok
+
+print("\n3. Phase 3: Resampler exactness & 1->2->1 multi-client ownership transition")
+x24 = np.linspace(-0.5, 0.5, 240, dtype=np.float32)
+x16 = np.linspace(-0.5, 0.5, 160, dtype=np.float32)
+def _ref_up2(x):
+    out = np.empty(len(x) * 2, dtype=np.float32)
+    out[0::2] = x
+    out[1::2] = (x + np.append(x[1:], x[-1])) * np.float32(0.5)
+    return out
+def _ref_up3(x):
+    out = np.empty(len(x) * 3, dtype=np.float32)
+    xn = np.append(x[1:], x[-1])
+    out[0::3] = x
+    out[1::3] = x * np.float32(2.0 / 3.0) + xn * np.float32(1.0 / 3.0)
+    out[2::3] = x * np.float32(1.0 / 3.0) + xn * np.float32(2.0 / 3.0)
+    return out
+assert np.array_equal(upsample_2x(x24), _ref_up2(x24))
+assert np.allclose(upsample_3x(x16), _ref_up3(x16), atol=1e-7)
+
+# 1 -> 2 -> 1 ownership promotion test
+d3 = tempfile.mkdtemp()
+cfg3 = ConfigManager(os.path.join(d3, "c3.json"))
+cfg3.data["network"]["port"] = 25029
+cfg3.data["network"]["beacon"] = False
+cfg3.data["network"]["lock_client"] = False
+cfg3.data["studio_fx"].update(smart_noise_cancel=False, gate_enabled=False, lowcut_enabled=False)
+fake_sd.OutputStream.registry.clear()
+rx3 = Receiver(cfg3, sd_module=fake_sd, netinfo=system.NetworkInfo())
+jb_id = id(rx3.jb)
+a1 = ("10.1.1.1", 5001)
+a2 = ("10.1.1.2", 5002)
+
+# Phone 1 connects (1) -> shares rx3.jb directly (single push)
+for s in range(5):
+    rx3.on_packet(s, tone_pcm(s, amp=0.25), a1, "UDP", 48000)
+assert len(rx3.client_streams) == 1
+assert rx3.client_streams[a1].jb is rx3.jb
+assert rx3.jb.depth == 5  # NOT doubled
+
+# Phone 2 connects (2)
+for s in range(5):
+    rx3.on_packet(s, tone_pcm(s, amp=0.30), a2, "UDP", 48000)
+assert len(rx3.client_streams) == 2
+assert rx3.client_streams[a1].jb is rx3.jb
+assert rx3.client_streams[a2].jb is not rx3.jb
+
+# Age Phone 1 > 3.5s while Phone 2 stays fresh -> _produce() prunes Phone 1 and promotes Phone 2 onto rx3.jb
+rx3.client_streams[a1].last_seen = time.monotonic() - 5.0
+rx3.client_streams[a2].last_seen = time.monotonic()
+assert rx3._produce() is True
+assert len(rx3.client_streams) == 1 and a2 in rx3.client_streams
+assert id(rx3.jb) == jb_id
+assert rx3.client_streams[a2].jb is rx3.jb
+assert rx3.client_ip == "10.1.1.2"
+assert rx3.jb.depth > 0 and rx3.main.expect_audio() is True
+rx3.stop(); cfg3.close()
+print("  PASS upsample exactness & 1->2->1 ownership promotion")
+
 rx.stop(); cfg.close()
 print("  PASS clean shutdown; threads left:", [t.name for t in threading.enumerate() if t.name.startswith("PM-")])
