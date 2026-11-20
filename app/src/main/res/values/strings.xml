@@ -73,4 +73,48 @@
         <item>Standard Mic</item>
         <item>Camcorder</item>
     </string-array>
+
+    <string name="open_settings_cd">Open Settings</string>
+    <string name="settings_title">Settings</string>
+    <string name="settings_back_cd">Back from Settings</string>
+
+    <string name="settings_section_general">GENERAL</string>
+    <string name="settings_section_audio">AUDIO</string>
+    <string name="settings_section_appearance">APPEARANCE</string>
+    <string name="settings_section_about">ABOUT</string>
+
+    <string name="setting_auto_start_title">Auto-Start Streaming</string>
+    <string name="setting_auto_start_desc">Start streaming automatically on launch when receiver address is valid</string>
+    <string name="setting_ptt_title">Push-to-Talk (Hold to Talk)</string>
+    <string name="setting_ptt_desc">Keep microphone muted while streaming until you hold the talk pad</string>
+    <string name="setting_auto_reconnect_title">Auto-Reconnect</string>
+    <string name="setting_auto_reconnect_desc">Retry connection automatically with backoff if network or TCP drops</string>
+    <string name="setting_keep_awake_title">Keep Screen Awake</string>
+    <string name="setting_keep_awake_desc">Prevent screen timeout while PhoneMic is active</string>
+    <string name="setting_overlay_title">Floating Mute Pill</string>
+    <string name="setting_overlay_desc">Show draggable mute widget over games and other apps</string>
+
+    <string name="setting_physical_mic_title">Input Microphone Device</string>
+    <string name="setting_physical_mic_refresh">Refresh input devices</string>
+    <string name="setting_audio_source_title">Android AudioSource Mode</string>
+    <string name="setting_sample_rate_title">Sample Rate</string>
+    <string name="setting_audio_format_title">Audio Format</string>
+    <string name="setting_channels_title">Channels</string>
+    <string name="setting_audio_locked_note">Stop the active stream to change sample rate, format, channels, or source.</string>
+
+    <string name="setting_visualizer_title">Home Audio Visualizer</string>
+    <string name="setting_visualizer_desc">Show real-time signal visualization on the Studio home screen</string>
+    <string name="setting_visualizer_style_title">Visualizer Style</string>
+    <string name="setting_appearance_redesign_title">Themes &amp; UI Redesign Coming Soon</string>
+    <string name="setting_appearance_redesign_desc">Additional color themes, layout presets, and full UI polish will arrive in the upcoming visual redesign pass.</string>
+
+    <string name="setting_about_version">App Version</string>
+    <string name="setting_about_device">Device Profile</string>
+    <string name="setting_about_protocol">Wire Protocol</string>
+    <string name="setting_about_protocol_val">PM01–PM03 Legacy + PM04 Extended</string>
+    <string name="setting_about_guide">Open Setup Guide</string>
+    <string name="setting_about_share_cli">Share CLI Receiver</string>
+
+    <string name="ptt_hold_to_talk">HOLD TO TALK</string>
+    <string name="ptt_transmitting">TALKING (RELEASE TO MUTE)</string>
 </resources>

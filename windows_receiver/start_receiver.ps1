@@ -1,5 +1,5 @@
-# PhoneMic Windows Receiver v1.3.0 - PowerShell launcher
-$Host.UI.RawUI.WindowTitle = "PhoneMic Windows Receiver v1.3.0"
+# PhoneMic Windows Receiver v1.4.0 - PowerShell launcher
+$Host.UI.RawUI.WindowTitle = "PhoneMic Windows Receiver v1.4.0"
 
 $exe = @("PhoneMicReceiver.exe", "dist\PhoneMicReceiver.exe", "dist\PhoneMicReceiver\PhoneMicReceiver.exe") |
     ForEach-Object { Join-Path $PSScriptRoot $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1

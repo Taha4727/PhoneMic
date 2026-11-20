@@ -259,6 +259,51 @@ def test_cli_tcp_raw_16k_and_framed_24k():
         phonemic_cli.sd = orig_sd
 
 
+def test_cli_pm04_formats():
+    Parser = phonemic_cli._CliTcpStreamParser
+    hdr = b"PM04" + struct.pack(">IIBBH", 0, 44100, 2, phonemic_cli.FMT_PCM_FLOAT32, 0)
+    payload = b"\x00\x00\x00\x3f" * (441 * 2)
+    hdr1 = b"PM04" + struct.pack(">IIBBH", 1, 44100, 2, phonemic_cli.FMT_PCM_FLOAT32, 0)
+    stream = hdr + payload + hdr1 + payload
+
+    p = Parser(default_rate=48000)
+    frames = []
+    for off in range(0, len(stream), 500):
+        frames.extend(p.feed_ex(stream[off:off + 500]))
+    assert p.mode == "framed" and p.sample_rate == 44100 and p.channels == 2
+    assert len(frames) == 2 and frames[0][3] == 2 and frames[1][4] == phonemic_cli.FMT_PCM_FLOAT32
+
+    if not HAS_NUMPY:
+        print("  SKIP NumPy CLI PM04 tests (numpy not installed)")
+        return
+
+    orig_sd = phonemic_cli.sd
+    phonemic_cli.sd = fake_sd
+    port = 25244
+    cli = phonemic_cli.CliReceiver(port=port, use_tcp=False)
+    cli.start(interactive=False)
+    time.sleep(0.15)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # 48 kHz Stereo Float32 UDP packets (3856 B each)
+        pcm_f32 = np.full(480 * 2, 0.3, dtype="<f4").tobytes()
+        for seq in range(5):
+            pkt = b"PM04" + struct.pack(">IIBBH", seq, 48000, 2, phonemic_cli.FMT_PCM_FLOAT32, 0) + pcm_f32
+            sock.sendto(pkt, ("127.0.0.1", port))
+            time.sleep(0.008)
+        deadline = time.monotonic() + 1.0
+        while cli.master_peak == 0.0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        with cli.clients_lock:
+            stream_obj = next(iter(cli.clients.values()))
+            assert stream_obj.channels == 2 and stream_obj.fmt_code == phonemic_cli.FMT_PCM_FLOAT32
+        assert abs(cli.master_peak - 0.3) < 0.05, cli.master_peak
+    finally:
+        sock.close()
+        cli.stop()
+        phonemic_cli.sd = orig_sd
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

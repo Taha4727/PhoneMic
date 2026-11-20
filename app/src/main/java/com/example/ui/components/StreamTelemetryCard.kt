@@ -30,6 +30,9 @@ import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
 import com.example.DeviceProfile
 import com.example.PhoneMicService
+import com.example.audio.AudioChannelOption
+import com.example.audio.AudioFormatOption
+import com.example.audio.AudioProtocol
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.StreamActiveGreen
 import com.example.ui.theme.StreamWarningAmber
@@ -54,8 +57,21 @@ fun StreamTelemetryCard(
     connectionMode: String = "",
     elapsedSeconds: Long = 0L,
     audioQuality: PhoneMicService.Companion.AudioQuality = PhoneMicService.Companion.AudioQuality.STUDIO_48K,
+    sampleRateHz: Int = audioQuality.sampleRate,
+    audioFormat: AudioFormatOption = AudioFormatOption.PCM_16BIT,
+    channels: Int = 1,
+    selectedMicName: String = "System Default",
     modifier: Modifier = Modifier
 ) {
+    val payloadBytes = AudioProtocol.framePayloadBytes(sampleRateHz, channels, audioFormat)
+    val nominalKbps = AudioProtocol.estimatedKbps(sampleRateHz, channels, audioFormat)
+    val channelOption = AudioChannelOption.fromCount(channels)
+    val wireFormatLabel = if (AudioProtocol.isLegacyStandardStream(sampleRateHz, channels, audioFormat)) {
+        "PM01–PM03 Standard"
+    } else {
+        "PM04 Extended"
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -155,7 +171,6 @@ fun StreamTelemetryCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Metric: Packets Sent
                 TelemetryMetricTile(
                     title = "PACKETS SENT",
                     value = if (isRunning) String.format(Locale.US, "%,d", packetsSent) else "--",
@@ -163,7 +178,6 @@ fun StreamTelemetryCard(
                     modifier = Modifier.weight(1f)
                 )
 
-                // Metric: Stream Rate
                 val rateText = if (isRunning && !isPaused) {
                     if (packetRate > 0) String.format(Locale.US, "%.1f", packetRate) else "100.0"
                 } else "0.0"
@@ -179,7 +193,6 @@ fun StreamTelemetryCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Metric: Data Transferred
                 val mb = bytesSent / (1024f * 1024f)
                 val transValue = when {
                     !isRunning -> "--"
@@ -194,8 +207,7 @@ fun StreamTelemetryCard(
                     modifier = Modifier.weight(1f)
                 )
 
-                // Metric: Audio Bitrate
-                val nominalBitrate = String.format(Locale.US, "%.1f", (audioQuality.sampleRate * 16) / 1000f)
+                val nominalBitrate = String.format(Locale.US, "%d.0", nominalKbps)
                 TelemetryMetricTile(
                     title = "BITRATE",
                     value = if (isRunning && !isPaused) nominalBitrate else "0.0",
@@ -241,10 +253,12 @@ fun StreamTelemetryCard(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                SpecRow(label = "Sampling Rate", value = String.format(Locale.US, "%,d Hz", audioQuality.sampleRate))
-                SpecRow(label = "Audio Format", value = "16-bit Linear PCM")
-                SpecRow(label = "Channels", value = "1 (Mono)")
-                SpecRow(label = "Packet Buffer", value = "10 ms (${audioQuality.packetSize} bytes)")
+                SpecRow(label = "Input Device", value = selectedMicName)
+                SpecRow(label = "Sampling Rate", value = String.format(Locale.US, "%,d Hz", sampleRateHz))
+                SpecRow(label = "Audio Format", value = audioFormat.label)
+                SpecRow(label = "Channels", value = channelOption.label)
+                SpecRow(label = "Packet Buffer", value = "10 ms ($payloadBytes bytes)")
+                SpecRow(label = "Wire Packet", value = wireFormatLabel)
                 SpecRow(label = "Transport Protocol", value = transportMode.uppercase(Locale.US))
             }
         }
@@ -296,7 +310,7 @@ fun StreamTelemetryCard(
             }
         }
 
-        // 4. Hardware & Platform Profile Card (POCO X6 Pro 5G / Android 16)
+        // 4. Hardware & Platform Profile Card
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -335,7 +349,10 @@ fun StreamTelemetryCard(
                 SpecRow(label = "Device Model", value = DeviceProfile.deviceDisplayName)
                 SpecRow(label = "Platform OS", value = DeviceProfile.osDisplayName)
                 SpecRow(label = "Chipset / SoC", value = DeviceProfile.chipsetDisplayName)
-                SpecRow(label = "Audio Pipeline", value = "Direct 48 kHz 16-bit PCM (Low Latency)")
+                SpecRow(
+                    label = "Audio Pipeline",
+                    value = "Direct ${sampleRateHz / 1000} kHz ${audioFormat.shortLabel} (${channelOption.shortLabel})"
+                )
                 SpecRow(label = "FGS Type", value = "Microphone FGS (API 36 Compliant)")
             }
         }

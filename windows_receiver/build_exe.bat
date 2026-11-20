@@ -3,7 +3,7 @@ title Build PhoneMicReceiver.exe (PyInstaller)
 color 0b
 
 echo ===============================================================================
-echo            PhoneMic Windows Receiver - Standalone .EXE Builder (v1.3.0)
+echo            PhoneMic Windows Receiver - Standalone .EXE Builder (v1.4.0)
 echo ===============================================================================
 echo.
 echo   build_exe.bat            single portable .exe   (starts in a few seconds)

@@ -38,7 +38,7 @@ import threading
 import time
 from collections import deque
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 DEFAULT_PORT = 5001
 DISCOVERY_PROBE = b"PM_DISCOVER"
 DISCOVERY_REPLY = b"PMA1"
@@ -55,9 +55,24 @@ MAGIC_U32_TO_RATE = {
     0x504D3032: 24000,  # b"PM02"
     0x504D3033: 16000,  # b"PM03"
 }
+MAGIC_EXT_U32 = 0x504D3034  # b"PM04"
 MAGIC_BYTES_TO_RATE = {b"PM01": 48000, b"PM02": 24000, b"PM03": 16000}
+FMT_PCM_16 = 0
+FMT_PCM_8 = 1
+FMT_PCM_24 = 2
+FMT_PCM_FLOAT32 = 3
+FMT_BYTES_PER_SAMPLE = {
+    FMT_PCM_16: 2,
+    FMT_PCM_8: 1,
+    FMT_PCM_24: 3,
+    FMT_PCM_FLOAT32: 4,
+}
+_PM04_STRUCT = struct.Struct(">IIIBBH")
+PM04_HEADER_BYTES = _PM04_STRUCT.size
+MIN_EXT_RATE = 8000
+MAX_EXT_RATE = 192000
 MAX_TCP_ACCUM_BYTES = 65536
-TCP_HEADER_PEEK_CAP = 1936
+TCP_HEADER_PEEK_CAP = 8192
 MAX_TCP_CLIENTS = 8
 
 try:
@@ -69,12 +84,18 @@ except ImportError as _e:
 
 if np is not None:
     _INV_I16 = np.float32(1.0 / 32768.0)
+    _INV_I8 = np.float32(1.0 / 128.0)
+    _INV_I24 = np.float32(1.0 / 8388608.0)
+    _RESAMPLE_AXIS_CACHE = {}
     _EMPTY_F32 = np.zeros(0, dtype=np.float32)
     _EMPTY_F32.setflags(write=False)
     _ZERO_FRAME = np.zeros(FRAME_48K, dtype=np.float32)
     _ZERO_FRAME.setflags(write=False)
 else:
     _INV_I16 = 1.0 / 32768.0
+    _INV_I8 = 1.0 / 128.0
+    _INV_I24 = 1.0 / 8388608.0
+    _RESAMPLE_AXIS_CACHE = {}
     _EMPTY_F32 = None
     _ZERO_FRAME = None
 
@@ -189,12 +210,62 @@ def upsample_3x(x: np.ndarray) -> np.ndarray:
     return out
 
 
+def _pm04_frame_bytes(sample_rate: int, channels: int, fmt_code: int) -> int:
+    if not (MIN_EXT_RATE <= sample_rate <= MAX_EXT_RATE) or channels not in (1, 2):
+        return 0
+    bps = FMT_BYTES_PER_SAMPLE.get(fmt_code)
+    if bps is None:
+        return 0
+    samples = max(1, (sample_rate * 10) // 1000)
+    fb = samples * channels * bps
+    if fb <= 0 or (PM04_HEADER_BYTES + fb) > (MAX_TCP_ACCUM_BYTES // 2):
+        return 0
+    return fb
+
+
+def _parse_pm04_header(buf, offset: int = 0):
+    if len(buf) - offset < PM04_HEADER_BYTES:
+        return None
+    magic_u32, seq, sr, ch, fmt_code, _flags = _PM04_STRUCT.unpack_from(buf, offset)
+    if magic_u32 != MAGIC_EXT_U32:
+        return None
+    fb = _pm04_frame_bytes(sr, ch, fmt_code)
+    if fb <= 0:
+        return None
+    return seq, sr, ch, fmt_code, fb
+
+
+def resample_linear_to_48k(x: np.ndarray, sample_rate: int) -> np.ndarray:
+    n = len(x)
+    if n == 0:
+        return _EMPTY_F32 if _EMPTY_F32 is not None else np.zeros(0, dtype=np.float32)
+    if sample_rate == 48000:
+        return x
+    if sample_rate == 24000:
+        return upsample_2x(x)
+    if sample_rate == 16000:
+        return upsample_3x(x)
+    if n == 1:
+        return np.full(FRAME_48K, x[0], dtype=np.float32)
+    out_len = max(1, int(round(n * (48000.0 / float(sample_rate)))))
+    key = (n, out_len)
+    pair = _RESAMPLE_AXIS_CACHE.get(key)
+    if pair is None:
+        xp = np.arange(n, dtype=np.float32)
+        x_eval = np.arange(out_len, dtype=np.float32) * np.float32(float(n) / float(out_len))
+        pair = (xp, x_eval)
+        if len(_RESAMPLE_AXIS_CACHE) < 32:
+            _RESAMPLE_AXIS_CACHE[key] = pair
+    xp, x_eval = pair
+    return np.interp(x_eval, xp, x).astype(np.float32)
+
+
 # -----------------------------------------------------------------------------
-# Wire Parser (Raw 48k/24k/16k PCM + Compat Framed PM01/PM02/PM03) & Ring Buffer
+# Wire Parser (Raw 48k/24k/16k PCM + Compat Framed PM01..PM04) & Ring Buffer
 # -----------------------------------------------------------------------------
 class _CliTcpStreamParser:
     """Standalone stateful TCP parser preserving raw PCM across 48k/24k/16k
-    plus strict byte-0 dual-header compat detection for PM01/PM02/PM03 streams.
+    plus strict byte-0 dual-header compat detection for PM01..PM04 streams.
     """
 
     def __init__(self, default_rate: int = 48000):
@@ -202,6 +273,8 @@ class _CliTcpStreamParser:
         self.default_rate = rate
         self.sample_rate = rate
         self.frame_bytes = RATE_TO_FRAME_BYTES[rate]
+        self.channels = 1
+        self.fmt_code = FMT_PCM_16
         self.mode = "unknown"       # "unknown" -> "raw" | "framed"
         self.acc = bytearray()
         self.pos = 0
@@ -211,6 +284,9 @@ class _CliTcpStreamParser:
         return len(self.acc) - self.pos
 
     def feed(self, chunk):
+        return [(seq, pcm, sr) for seq, pcm, sr, _, _ in self.feed_ex(chunk)]
+
+    def feed_ex(self, chunk):
         if not chunk:
             return []
         if self.buffered_bytes + len(chunk) > MAX_TCP_ACCUM_BYTES:
@@ -229,7 +305,7 @@ class _CliTcpStreamParser:
             try:
                 while (len(self.acc) - self.pos) >= fb:
                     end = self.pos + fb
-                    frames.append((-1, bytes(mv[self.pos:end]), sr))
+                    frames.append((-1, bytes(mv[self.pos:end]), sr, 1, FMT_PCM_16))
                     self.pos = end
             finally:
                 mv.release()
@@ -238,17 +314,31 @@ class _CliTcpStreamParser:
             try:
                 while (len(self.acc) - self.pos) >= 8:
                     magic_u32, seq = struct.unpack_from(">II", self.acc, self.pos)
-                    sr = MAGIC_U32_TO_RATE.get(magic_u32)
-                    if sr is None:
-                        raise ValueError("Invalid magic inside framed TCP stream")
-                    fb = RATE_TO_FRAME_BYTES[sr]
-                    if (len(self.acc) - self.pos) < 8 + fb:
+                    if magic_u32 == MAGIC_EXT_U32:
+                        if (len(self.acc) - self.pos) < PM04_HEADER_BYTES:
+                            break
+                        parsed = _parse_pm04_header(self.acc, self.pos)
+                        if parsed is None:
+                            raise ValueError("Invalid PM04 header inside framed TCP stream")
+                        seq, sr, ch, fmt_code, fb = parsed
+                        hdr_len = PM04_HEADER_BYTES
+                    else:
+                        sr = MAGIC_U32_TO_RATE.get(magic_u32)
+                        if sr is None:
+                            raise ValueError("Invalid magic inside framed TCP stream")
+                        ch = 1
+                        fmt_code = FMT_PCM_16
+                        fb = RATE_TO_FRAME_BYTES[sr]
+                        hdr_len = 8
+                    if (len(self.acc) - self.pos) < hdr_len + fb:
                         break
-                    start = self.pos + 8
+                    start = self.pos + hdr_len
                     end = start + fb
                     self.sample_rate = sr
+                    self.channels = ch
+                    self.fmt_code = fmt_code
                     self.frame_bytes = fb
-                    frames.append((seq, bytes(mv[start:end]), sr))
+                    frames.append((seq, bytes(mv[start:end]), sr, ch, fmt_code))
                     self.pos = end
             finally:
                 mv.release()
@@ -264,6 +354,13 @@ class _CliTcpStreamParser:
             raise BufferError(f"TCP accumulator exceeded {MAX_TCP_ACCUM_BYTES} bytes")
         return frames
 
+    def _lock_raw(self):
+        self.mode = "raw"
+        self.sample_rate = self.default_rate
+        self.frame_bytes = RATE_TO_FRAME_BYTES[self.default_rate]
+        self.channels = 1
+        self.fmt_code = FMT_PCM_16
+
     def _detect_mode(self):
         avail = len(self.acc) - self.pos
         if avail < 4:
@@ -271,19 +368,39 @@ class _CliTcpStreamParser:
         mv = memoryview(self.acc)
         try:
             head0 = bytes(mv[self.pos:self.pos + 4])
+            if head0 == b"PM04":
+                if avail < PM04_HEADER_BYTES:
+                    return
+                parsed0 = _parse_pm04_header(self.acc, self.pos)
+                if parsed0 is None:
+                    self._lock_raw()
+                    return
+                seq0, sr0, ch0, fmt0, fb0 = parsed0
+                need = PM04_HEADER_BYTES + fb0 + PM04_HEADER_BYTES
+                if avail < need:
+                    if avail >= TCP_HEADER_PEEK_CAP:
+                        self._lock_raw()
+                    return
+                parsed1 = _parse_pm04_header(self.acc, self.pos + PM04_HEADER_BYTES + fb0)
+                if parsed1 is not None and seq0 <= 16 and parsed1[0] == ((seq0 + 1) & MASK32):
+                    self.mode = "framed"
+                    self.sample_rate = sr0
+                    self.channels = ch0
+                    self.fmt_code = fmt0
+                    self.frame_bytes = fb0
+                else:
+                    self._lock_raw()
+                return
+
             sr0 = MAGIC_BYTES_TO_RATE.get(head0)
             if sr0 is None:
-                self.mode = "raw"
-                self.sample_rate = self.default_rate
-                self.frame_bytes = RATE_TO_FRAME_BYTES[self.default_rate]
+                self._lock_raw()
                 return
             fb0 = RATE_TO_FRAME_BYTES[sr0]
             need = 8 + fb0 + 8
             if avail < need:
                 if avail >= TCP_HEADER_PEEK_CAP:
-                    self.mode = "raw"
-                    self.sample_rate = self.default_rate
-                    self.frame_bytes = RATE_TO_FRAME_BYTES[self.default_rate]
+                    self._lock_raw()
                 return
             seq0 = struct.unpack_from(">I", self.acc, self.pos + 4)[0]
             head1_off = self.pos + 8 + fb0
@@ -292,11 +409,11 @@ class _CliTcpStreamParser:
             if head1 == head0 and seq0 <= 16 and seq1 == ((seq0 + 1) & MASK32):
                 self.mode = "framed"
                 self.sample_rate = sr0
+                self.channels = 1
+                self.fmt_code = FMT_PCM_16
                 self.frame_bytes = fb0
             else:
-                self.mode = "raw"
-                self.sample_rate = self.default_rate
-                self.frame_bytes = RATE_TO_FRAME_BYTES[self.default_rate]
+                self._lock_raw()
         finally:
             mv.release()
 
@@ -373,11 +490,13 @@ class Ring:
 # Per-Client Stream Tracking & Metrics
 # -----------------------------------------------------------------------------
 class ClientStream:
-    def __init__(self, addr, sample_rate=48000, target_packets=3):
+    def __init__(self, addr, sample_rate=48000, target_packets=3, channels=1, fmt_code=FMT_PCM_16):
         self.addr = addr
         self.ip = addr[0]
         self.port = addr[1]
         self.sample_rate = sample_rate
+        self.channels = channels
+        self.fmt_code = fmt_code
         self.queue = deque(maxlen=30)
         self.target_packets = target_packets
         self.connected_at = time.monotonic()
@@ -395,7 +514,7 @@ class ClientStream:
         self.last_rate_calc = self.connected_at
         self.kbps = 0.0
 
-    def push(self, pcm_bytes: bytes, sample_rate: int, seq: int = -1):
+    def push(self, pcm_bytes: bytes, sample_rate: int, seq: int = -1, channels: int = 1, fmt_code: int = FMT_PCM_16):
         now = time.monotonic()
         self.last_seen = now
         self.packet_count += 1
@@ -403,6 +522,8 @@ class ClientStream:
         self.bytes_count += nbytes
         self.rate_bytes += nbytes
         self.sample_rate = sample_rate
+        self.channels = 2 if channels == 2 else 1
+        self.fmt_code = fmt_code
 
         # Sequence gap check (uint32 sequence numbers)
         if seq >= 0 and self.last_seq >= 0:
@@ -419,7 +540,7 @@ class ClientStream:
             self.rate_bytes = 0
             self.last_rate_calc = now
 
-        self.queue.append(pcm_bytes)
+        self.queue.append((pcm_bytes, sample_rate, self.channels, fmt_code))
         if self.buffering and len(self.queue) >= self.target_packets:
             self.buffering = False
 
@@ -432,20 +553,36 @@ class ClientStream:
             self.current_db = -60.0
             return _ZERO_FRAME
 
-        pcm = self.queue.popleft()
-        even_len = len(pcm) & ~1
-        if even_len < 2:
+        pcm, sr, ch, fmt_code = self.queue.popleft()
+        bps = FMT_BYTES_PER_SAMPLE.get(fmt_code, 2)
+        stride = ch * bps
+        usable = len(pcm) - (len(pcm) % stride)
+        if usable < stride:
             return _ZERO_FRAME
-        raw = np.frombuffer(pcm[:even_len], dtype="<i2").astype(np.float32)
-        raw *= _INV_I16
+        mv = memoryview(pcm)[:usable]
 
-        # Upsample to 48k master clock if sender is 24k or 16k
-        if self.sample_rate == 24000:
-            samples = upsample_2x(raw)
-        elif self.sample_rate == 16000:
-            samples = upsample_3x(raw)
+        if fmt_code == FMT_PCM_16:
+            raw = np.frombuffer(mv, dtype="<i2").astype(np.float32) * _INV_I16
+        elif fmt_code == FMT_PCM_8:
+            raw = (np.frombuffer(mv, dtype=np.uint8).astype(np.float32) - np.float32(128.0)) * _INV_I8
+        elif fmt_code == FMT_PCM_24:
+            u8 = np.frombuffer(mv, dtype=np.uint8).reshape(-1, 3)
+            b0 = u8[:, 0].astype(np.int32)
+            b1 = u8[:, 1].astype(np.int32) << 8
+            b2 = u8[:, 2].view(np.int8).astype(np.int32) << 16
+            raw = (b0 | b1 | b2).astype(np.float32) * _INV_I24
+        elif fmt_code == FMT_PCM_FLOAT32:
+            raw = np.frombuffer(mv, dtype="<f4").astype(np.float32, copy=True)
+            np.nan_to_num(raw, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+            np.clip(raw, -1.0, 1.0, out=raw)
         else:
-            samples = raw
+            return _ZERO_FRAME
+
+        if ch == 2:
+            even_pairs = (len(raw) // 2) * 2
+            raw = (raw[0:even_pairs:2] + raw[1:even_pairs:2]) * np.float32(0.5)
+
+        samples = resample_linear_to_48k(raw, sr) if sr != 48000 else raw
 
         if len(samples) < FRAME_48K:
             padded = np.zeros(FRAME_48K, dtype=np.float32)
@@ -747,7 +884,7 @@ class CliReceiver:
             return
 
         self._udp_sock = sock
-        buf = bytearray(4096)
+        buf = bytearray(8192)
         mv = memoryview(buf)
         try:
             while self.running:
@@ -772,6 +909,23 @@ class CliReceiver:
                     pcm_len = (n - 8) & ~1
                     if pcm_len >= 2:
                         self._on_client_packet(addr, bytes(mv[8:8 + pcm_len]), sr, seq)
+                    continue
+                if magic_u32 == MAGIC_EXT_U32 and n >= PM04_HEADER_BYTES:
+                    parsed = _parse_pm04_header(buf, 0)
+                    if parsed is not None:
+                        seq, sr, ch, fmt_code, _ = parsed
+                        stride = ch * FMT_BYTES_PER_SAMPLE[fmt_code]
+                        avail = n - PM04_HEADER_BYTES
+                        usable = avail - (avail % stride)
+                        if usable >= stride:
+                            self._on_client_packet(
+                                addr,
+                                bytes(mv[PM04_HEADER_BYTES:PM04_HEADER_BYTES + usable]),
+                                sr,
+                                seq,
+                                channels=ch,
+                                fmt_code=fmt_code,
+                            )
                     continue
 
                 # Auto-discovery probe (PMD0 or PM_DISCOVER)
@@ -856,13 +1010,13 @@ class CliReceiver:
         try:
             while self.running:
                 try:
-                    chunk = conn.recv(4096)
+                    chunk = conn.recv(8192)
                 except socket.timeout:
                     continue
                 if not chunk:
                     break
-                for seq, pcm, sr in parser.feed(chunk):
-                    self._on_client_packet(addr, pcm, sr, seq)
+                for seq, pcm, sr, ch, fmt_code in parser.feed_ex(chunk):
+                    self._on_client_packet(addr, pcm, sr, seq, channels=ch, fmt_code=fmt_code)
         except Exception:
             pass
         finally:
@@ -873,7 +1027,7 @@ class CliReceiver:
             except Exception:
                 pass
 
-    def _on_client_packet(self, addr, pcm, sample_rate, seq):
+    def _on_client_packet(self, addr, pcm, sample_rate, seq, channels=1, fmt_code=FMT_PCM_16):
         now = time.monotonic()
         with self.clients_lock:
             client = self.clients.get(addr)
@@ -885,9 +1039,9 @@ class CliReceiver:
                         del self.clients[oldest_addr]
                     else:
                         return
-                client = ClientStream(addr, sample_rate)
+                client = ClientStream(addr, sample_rate, channels=channels, fmt_code=fmt_code)
                 self.clients[addr] = client
-            client.push(pcm, sample_rate, seq)
+            client.push(pcm, sample_rate, seq, channels=channels, fmt_code=fmt_code)
         self._wake_event.set()
 
     # -- Mixer Engine ----------------------------------------------------------
@@ -1054,10 +1208,11 @@ class CliReceiver:
                             ratio = max(0.0, min(1.0, (c.current_db + 60.0) / 60.0))
                             filled = int(round(ratio * meter_len))
                             bar = "#" * filled + "-" * (meter_len - filled)
-                            sr_khz = f"{c.sample_rate // 1000}k"
+                            sr_khz = f"{c.sample_rate / 1000.0:g}k"
+                            ch_tag = " ST" if c.channels == 2 else ""
                             meter_color = "\033[32m" if c.current_db < -6.0 else ("\033[33m" if c.current_db < -1.0 else "\033[31m")
 
-                            lines.append(f"   #{idx} \033[1m{c.ip}:{c.port}\033[0m [{sr_khz}] [{meter_color}{bar}\033[0m] {c.current_db:5.1f} dB")
+                            lines.append(f"   #{idx} \033[1m{c.ip}:{c.port}\033[0m [{sr_khz}{ch_tag}] [{meter_color}{bar}\033[0m] {c.current_db:5.1f} dB")
 
                             if self.show_details:
                                 drop_pct = (c.lost_packets / max(1, c.packet_count + c.lost_packets)) * 100.0

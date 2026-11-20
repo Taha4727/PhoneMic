@@ -1,6 +1,6 @@
 """Protocol, audio and application constants (wire protocol is unchanged from v0.8)."""
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 APP_NAME = "PhoneMic Receiver"
 
 # --- Network / wire protocol (must match PhoneMicService.kt) -----------------
@@ -9,6 +9,17 @@ PACKET_MAGIC = b"PM01"            # 'PM01' + uint32 big-endian seq + 16-bit LE m
 PACKET_MAGIC_48K = b"PM01"
 PACKET_MAGIC_24K = b"PM02"        # 24 kHz Balanced (240 samples = 480 bytes)
 PACKET_MAGIC_16K = b"PM03"        # 16 kHz Low-Bandwidth (160 samples = 320 bytes)
+PACKET_MAGIC_EXT = b"PM04"        # Extended self-describing 16-byte header (rate, channels, format)
+FMT_PCM_16 = 0
+FMT_PCM_8 = 1
+FMT_PCM_24 = 2
+FMT_PCM_FLOAT32 = 3
+FMT_BYTES_PER_SAMPLE = {
+    FMT_PCM_16: 2,
+    FMT_PCM_8: 1,
+    FMT_PCM_24: 3,
+    FMT_PCM_FLOAT32: 4,
+}
 DISCOVERY_PROBE = b"PM_DISCOVER"
 DISCOVERY_REPLY = b"PMA1"         # reply / beacon: b"PMA1 <version> <ip>"
 CMD_PAUSE = b"PMP1"

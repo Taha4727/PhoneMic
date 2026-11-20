@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,12 +24,14 @@ import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +41,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -66,14 +70,25 @@ fun HeroMicControl(
     transportMode: String,
     connectionMode: String,
     audioDb: Float = -60f,
+    pushToTalkEnabled: Boolean = false,
+    isPttPressed: Boolean = false,
+    onPttPressChange: (Boolean) -> Unit = {},
     onStartClick: () -> Unit,
     onPauseClick: () -> Unit,
     onStopClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    DisposableEffect(isRunning, pushToTalkEnabled) {
+        onDispose {
+            onPttPressChange(false)
+        }
+    }
+
+    val effectiveMuted = isPaused || (pushToTalkEnabled && !isPttPressed)
+
     val activeColor = when {
         !isRunning -> NeonCyan
-        isPaused -> StreamWarningAmber
+        effectiveMuted -> StreamWarningAmber
         isConnected -> StreamActiveGreen
         else -> StreamWarningAmber
     }
@@ -107,8 +122,13 @@ fun HeroMicControl(
                         .background(activeColor, CircleShape)
                 )
 
+                val badgeLabel = when {
+                    isRunning && pushToTalkEnabled && !isPttPressed -> "PTT STANDBY"
+                    isRunning && pushToTalkEnabled && isPttPressed -> "PTT LIVE"
+                    else -> statusMessage.uppercase(Locale.US)
+                }
                 Text(
-                    text = statusMessage.uppercase(Locale.US),
+                    text = badgeLabel,
                     color = TextPrimary,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -155,7 +175,7 @@ fun HeroMicControl(
                     .background(
                         brush = Brush.verticalGradient(
                             colors = if (isRunning) {
-                                if (isPaused) listOf(Color(0xFF6E4E00), Color(0xFF382700))
+                                if (effectiveMuted) listOf(Color(0xFF6E4E00), Color(0xFF382700))
                                 else listOf(Color(0xFF00695C), Color(0xFF00382E))
                             } else {
                                 listOf(Color(0xFF0D3268), Color(0xFF081A36))
@@ -178,11 +198,11 @@ fun HeroMicControl(
                 Icon(
                     imageVector = when {
                         !isRunning -> Icons.Default.Mic
-                        isPaused -> Icons.Default.MicOff
+                        effectiveMuted -> Icons.Default.MicOff
                         else -> Icons.Default.Mic
                     },
                     contentDescription = if (isRunning) "Microphone active" else "Microphone ready",
-                    tint = if (isPaused) StreamWarningAmber else TextPrimary,
+                    tint = if (effectiveMuted && isRunning) StreamWarningAmber else TextPrimary,
                     modifier = Modifier.size(30.dp)
                 )
             }
@@ -197,14 +217,13 @@ fun HeroMicControl(
                     .testTag("integrated_audio_meter"),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // Meter Title + Real-time dB Value
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "MIC INPUT LEVEL",
+                        text = if (pushToTalkEnabled) "MIC LEVEL (PTT MODE)" else "MIC INPUT LEVEL",
                         color = TextSecondary,
                         fontSize = 9.5.sp,
                         fontWeight = FontWeight.Bold,
@@ -213,14 +232,14 @@ fun HeroMicControl(
 
                     val dbText = when {
                         !isRunning -> "OFFLINE"
-                        isPaused -> "MUTED"
+                        effectiveMuted -> "MUTED"
                         audioDb <= -59.5f -> "< -60 dB"
                         else -> String.format(Locale.US, "%.1f dB", audioDb)
                     }
 
                     val dbColor = when {
                         !isRunning -> TextMuted
-                        isPaused -> StreamWarningAmber
+                        effectiveMuted -> StreamWarningAmber
                         audioDb > -3f -> StreamErrorRed
                         audioDb > -12f -> StreamWarningAmber
                         else -> StreamActiveGreen
@@ -235,14 +254,13 @@ fun HeroMicControl(
                     )
                 }
 
-                // High-performance hardware-accelerated Canvas LED Meter (18 segments, 0 layout allocations)
                 Canvas(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(7.dp)
                 ) {
                     val totalSegments = 18
-                    val activeSegments = if (isRunning && !isPaused) {
+                    val activeSegments = if (isRunning && !effectiveMuted) {
                         ((audioDb + 60f) / 60f * totalSegments).toInt().coerceIn(0, totalSegments)
                     } else 0
 
@@ -268,7 +286,6 @@ fun HeroMicControl(
                     }
                 }
 
-                // dB Reference Scale
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -282,13 +299,13 @@ fun HeroMicControl(
             }
         }
 
-        // 3. Reliable Primary Action Buttons
+        // 3. Primary Action Controls (Start / PTT Hold Pad + Stop / Mute + Stop)
         if (!isRunning) {
             Button(
                 onClick = onStartClick,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(44.dp)
+                    .height(48.dp)
                     .testTag("start_streaming_button"),
                 shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -303,11 +320,92 @@ fun HeroMicControl(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "START STREAM",
+                    text = if (pushToTalkEnabled) "START STREAM (PTT)" else "START STREAM",
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 0.5.sp
                 )
+            }
+        } else if (pushToTalkEnabled) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Dedicated Push-to-Talk Hold Pad
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1.7f)
+                        .height(52.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (isPttPressed) StreamActiveGreen else Color(0xFF132536)
+                        )
+                        .border(
+                            width = 1.5.dp,
+                            color = if (isPttPressed) StreamActiveGreen else NeonCyan,
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    onPttPressChange(true)
+                                    try {
+                                        awaitRelease()
+                                    } finally {
+                                        onPttPressChange(false)
+                                    }
+                                }
+                            )
+                        }
+                        .testTag("ptt_hold_button")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isPttPressed) Icons.Default.Mic else Icons.Default.TouchApp,
+                            contentDescription = "Hold to talk",
+                            tint = if (isPttPressed) Color(0xFF002916) else NeonCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = if (isPttPressed) "TALKING (RELEASE TO MUTE)" else "HOLD TO TALK",
+                            color = if (isPttPressed) Color(0xFF002916) else NeonCyan,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.5.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = onStopClick,
+                    modifier = Modifier
+                        .weight(0.9f)
+                        .height(52.dp)
+                        .testTag("stop_streaming_button"),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = StreamErrorRed,
+                        contentColor = Color.White
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Stop,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Stop",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        maxLines = 1
+                    )
+                }
             }
         } else {
             Row(
@@ -318,7 +416,7 @@ fun HeroMicControl(
                     onClick = onPauseClick,
                     modifier = Modifier
                         .weight(1f)
-                        .height(40.dp)
+                        .height(48.dp)
                         .testTag("pause_resume_button"),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
@@ -351,7 +449,7 @@ fun HeroMicControl(
                     onClick = onStopClick,
                     modifier = Modifier
                         .weight(1f)
-                        .height(40.dp)
+                        .height(48.dp)
                         .testTag("stop_streaming_button"),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(

@@ -22,9 +22,10 @@ import numpy as np
 
 from . import system, virtual_mic
 from .const import (VERSION, FRAME, FRAME_MS, SAMPLE_RATE, PACKET_MAGIC, PACKET_MAGIC_24K, PACKET_MAGIC_16K,
+                    FMT_PCM_16, FMT_PCM_8, FMT_PCM_24, FMT_PCM_FLOAT32, FMT_BYTES_PER_SAMPLE,
                     DISCOVERY_PROBE, DISCOVERY_REPLY, CMD_PAUSE, CMD_RESUME, SIO_UDP_CONNRESET)
 from .dsp import AudioProcessor
-from .wire import MAGIC_U32_TO_RATE, TcpStreamParser
+from .wire import MAGIC_U32_TO_RATE, MAGIC_EXT_U32, PM04_HEADER_BYTES, parse_pm04_header, TcpStreamParser
 
 try:                                    # PortAudio missing raises OSError, not ImportError
     import sounddevice as _sd
@@ -79,12 +80,45 @@ def upsample_3x(x: np.ndarray) -> np.ndarray:
     return out
 
 
+_PCM8_SCALE = np.float32(1.0 / 128.0)
+_PCM24_SCALE = np.float32(1.0 / 8388608.0)
+_RESAMPLE_AXIS_CACHE = {}
+
+
+def resample_linear_to_48k(x: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Resample float32 mono samples from arbitrary sample_rate to 48 kHz internal engine rate."""
+    n = len(x)
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
+    if sample_rate == 48000:
+        return x
+    if sample_rate == 24000:
+        return upsample_2x(x)
+    if sample_rate == 16000:
+        return upsample_3x(x)
+    if n == 1:
+        return np.full(FRAME, x[0], dtype=np.float32)
+    out_len = max(1, int(round(n * (48000.0 / float(sample_rate)))))
+    key = (n, out_len)
+    pair = _RESAMPLE_AXIS_CACHE.get(key)
+    if pair is None:
+        xp = np.arange(n, dtype=np.float32)
+        x_eval = np.arange(out_len, dtype=np.float32) * np.float32(float(n) / float(out_len))
+        pair = (xp, x_eval)
+        if len(_RESAMPLE_AXIS_CACHE) < 32:
+            _RESAMPLE_AXIS_CACHE[key] = pair
+    xp, x_eval = pair
+    return np.interp(x_eval, xp, x).astype(np.float32)
+
+
 class ClientSession:
-    def __init__(self, addr, transport, sample_rate, jb):
+    def __init__(self, addr, transport, sample_rate, jb, channels=1, fmt_code=FMT_PCM_16):
         self.addr = addr
         self.ip = addr[0]
         self.transport = transport
         self.sample_rate = sample_rate
+        self.channels = channels
+        self.fmt_code = fmt_code
         self.jb = jb
         self.last_seen = time.monotonic()
         self.last_seq = None
@@ -777,7 +811,7 @@ class NetServer:
         sock.settimeout(0.5)
         self.udp = sock
         rx.log.info(f"Listening on UDP {self.port}")
-        buf = bytearray(4096)
+        buf = bytearray(8192)
         while gen == self.gen:
             try:
                 n, addr = sock.recvfrom_into(buf)
@@ -809,6 +843,24 @@ class NetServer:
                         mv.release()
                     self.rx.on_packet(seq, pcm, addr, "UDP", sample_rate=sr)
                 return
+            if magic_u32 == MAGIC_EXT_U32 and n >= PM04_HEADER_BYTES:
+                parsed = parse_pm04_header(buf, 0)
+                if parsed is not None:
+                    seq, sr, ch, fmt_code, _ = parsed
+                    stride = ch * FMT_BYTES_PER_SAMPLE[fmt_code]
+                    avail = n - PM04_HEADER_BYTES
+                    usable = avail - (avail % stride)
+                    if usable >= stride:
+                        mv = memoryview(buf)
+                        try:
+                            pcm = bytes(mv[PM04_HEADER_BYTES:PM04_HEADER_BYTES + usable])
+                        finally:
+                            mv.release()
+                        if ch == 1 and fmt_code == FMT_PCM_16:
+                            self.rx.on_packet(seq, pcm, addr, "UDP", sample_rate=sr)
+                        else:
+                            self.rx.on_packet(seq, pcm, addr, "UDP", sample_rate=sr, channels=ch, fmt_code=fmt_code)
+                    return
         head_end = min(n, 32)
         if (
             buf.find(b"PMD", 0, 3) == 0
@@ -876,7 +928,7 @@ class NetServer:
         rx = self.rx
         default_rate = self._cfg().get("raw_tcp_rate", 48000)
         parser = TcpStreamParser(default_rate=default_rate)
-        buf = bytearray(4096)
+        buf = bytearray(8192)
         mv = memoryview(buf)
         try:
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -896,12 +948,15 @@ class NetServer:
                     break
                 idle = 0.0
                 try:
-                    frames = parser.feed(mv[:n])
+                    frames = parser.feed_ex(mv[:n])
                 except (BufferError, ValueError) as exc:
                     rx.log.warn(f"Closing invalid TCP stream from {addr[0]}: {exc}")
                     break
-                for seq, frame_pcm, sr in frames:
-                    rx.on_packet(seq, frame_pcm, addr, "TCP", sample_rate=sr)
+                for seq, frame_pcm, sr, ch, fmt_code in frames:
+                    if ch == 1 and fmt_code == FMT_PCM_16:
+                        rx.on_packet(seq, frame_pcm, addr, "TCP", sample_rate=sr)
+                    else:
+                        rx.on_packet(seq, frame_pcm, addr, "TCP", sample_rate=sr, channels=ch, fmt_code=fmt_code)
         except OSError:
             pass
         finally:
@@ -1006,6 +1061,8 @@ class Receiver:
         self.client_ip = ""
         self.client_addr = None
         self.client_sample_rate = 48000
+        self.client_channels = 1
+        self.client_fmt_code = FMT_PCM_16
         self._clients_lock = threading.RLock()
         self.client_streams = {}          # addr -> ClientSession for multi-device mixing
         self.transport = "UDP"
@@ -1342,13 +1399,42 @@ class Receiver:
         self.client_addr = survivor.addr
         self.transport = survivor.transport
         self.client_sample_rate = survivor.sample_rate
+        self.client_channels = survivor.channels
+        self.client_fmt_code = survivor.fmt_code
 
-    def _decode_pcm_48k(self, pcm, sample_rate):
-        x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) * _PCM_SCALE
-        if sample_rate == 24000:
-            x = upsample_2x(x)
-        elif sample_rate == 16000:
-            x = upsample_3x(x)
+    def _decode_pcm_48k(self, pcm, sample_rate, channels=1, fmt_code=FMT_PCM_16):
+        ch = 2 if channels == 2 else 1
+        bps = FMT_BYTES_PER_SAMPLE.get(fmt_code, 2)
+        stride = ch * bps
+        usable = len(pcm) - (len(pcm) % stride)
+        if usable < stride:
+            return _ZERO_FRAME
+        raw_bytes = memoryview(pcm)[:usable]
+
+        if fmt_code == FMT_PCM_16:
+            x = np.frombuffer(raw_bytes, dtype="<i2").astype(np.float32) * _PCM_SCALE
+        elif fmt_code == FMT_PCM_8:
+            x = (np.frombuffer(raw_bytes, dtype=np.uint8).astype(np.float32) - np.float32(128.0)) * _PCM8_SCALE
+        elif fmt_code == FMT_PCM_24:
+            u8 = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(-1, 3)
+            b0 = u8[:, 0].astype(np.int32)
+            b1 = u8[:, 1].astype(np.int32) << 8
+            b2 = u8[:, 2].view(np.int8).astype(np.int32) << 16
+            x = (b0 | b1 | b2).astype(np.float32) * _PCM24_SCALE
+        elif fmt_code == FMT_PCM_FLOAT32:
+            x = np.frombuffer(raw_bytes, dtype="<f4").astype(np.float32, copy=True)
+            np.nan_to_num(x, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+            np.clip(x, -1.0, 1.0, out=x)
+        else:
+            return _ZERO_FRAME
+
+        if ch == 2:
+            even_pairs = (len(x) // 2) * 2
+            x = (x[0:even_pairs:2] + x[1:even_pairs:2]) * np.float32(0.5)
+
+        if sample_rate != 48000:
+            x = resample_linear_to_48k(x, sample_rate)
+
         n = len(x)
         if n < FRAME:
             padded = np.zeros(FRAME, np.float32)
@@ -1358,7 +1444,7 @@ class Receiver:
             return x[:FRAME]
         return x
 
-    def on_packet(self, seq, pcm, addr, transport, sample_rate=48000):
+    def on_packet(self, seq, pcm, addr, transport, sample_rate=48000, channels=1, fmt_code=FMT_PCM_16):
         now = time.monotonic()
         st = self.stats
         ip = addr[0]
@@ -1376,6 +1462,8 @@ class Receiver:
             return
 
         self.client_sample_rate = sample_rate
+        self.client_channels = 2 if channels == 2 else 1
+        self.client_fmt_code = fmt_code
 
         with self._clients_lock:
             session = self.client_streams.get(addr)
@@ -1394,13 +1482,15 @@ class Receiver:
                 else:
                     jb = JitterBuffer(audio_cfg["jitter_ms"], audio_cfg["adaptive_jitter"])
                     jb.set_limits(audio_cfg["adaptive_max_ms"], audio_cfg["drift_correction"])
-                session = ClientSession(addr, transport, sample_rate, jb)
+                session = ClientSession(addr, transport, sample_rate, jb, channels=self.client_channels, fmt_code=fmt_code)
                 self.client_streams[addr] = session
                 total = len(self.client_streams)
                 if total > 1:
                     self.log.info(f"Additional phone connected: {ip} ({sample_rate // 1000}kHz) [Total: {total} devices]")
             else:
                 session.sample_rate = sample_rate
+                session.channels = self.client_channels
+                session.fmt_code = fmt_code
                 session.transport = transport
                 session.last_seen = now
 
@@ -1558,13 +1648,15 @@ class Receiver:
                 if s.jb is self.jb:
                     primary_kind = p_kind
                 if p_pcm is not None:
-                    multi_blocks.append(self._decode_pcm_48k(p_pcm, s.sample_rate))
+                    multi_blocks.append(self._decode_pcm_48k(p_pcm, s.sample_rate, s.channels, s.fmt_code))
             kind = primary_kind
         else:
             # Single-session (shares self.jb) or zero sessions (fade-out/idle drain)
             pcm, kind = self.jb.pop()
             if n_sessions == 1 and pcm is not None:
                 self.client_sample_rate = sessions[0].sample_rate
+                self.client_channels = sessions[0].channels
+                self.client_fmt_code = sessions[0].fmt_code
 
         tone = self._tone_block(FRAME)
 
@@ -1618,7 +1710,7 @@ class Receiver:
 
         if not multi_blocks:
             if pcm is not None:
-                x = self._decode_pcm_48k(pcm, self.client_sample_rate)
+                x = self._decode_pcm_48k(pcm, self.client_sample_rate, self.client_channels, self.client_fmt_code)
                 self._last_raw = x
                 self._plc_run = 0
                 if self.jb.take_skipped():

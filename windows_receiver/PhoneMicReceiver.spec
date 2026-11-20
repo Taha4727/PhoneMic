@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for PhoneMic Windows Receiver v1.3.0
+PyInstaller spec for PhoneMic Windows Receiver v1.4.0
 
     pyinstaller --clean PhoneMicReceiver.spec                 -> dist\PhoneMicReceiver.exe        (single file, portable)
     set PM_ONEDIR=1 && pyinstaller --clean PhoneMicReceiver.spec

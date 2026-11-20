@@ -1,13 +1,16 @@
 package com.example
 
+import android.Manifest
 import android.app.Application
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.SharedPreferences
-import android.Manifest
 import android.content.pm.PackageManager
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -16,13 +19,17 @@ import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
+import com.example.audio.AudioFormatOption
+import com.example.audio.AudioProtocol
+import com.example.audio.InputMicDevice
+import com.example.audio.VisualizerSnapshot
+import com.example.audio.VisualizerStyle
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import java.util.regex.Pattern
+import kotlin.math.max
 
 data class PhoneMicUiState(
     val ip: String = "192.168.1.100",
@@ -43,6 +50,7 @@ data class PhoneMicUiState(
     val isScanningPc: Boolean = false,
     val scanFeedback: String? = null,
     val showGuideDialog: Boolean = false,
+    val showSettings: Boolean = false,
     val isIgnoringBatteryOptimizations: Boolean = true,
     val hasMicPermission: Boolean = false,
     val hasNotificationPermission: Boolean = false,
@@ -51,11 +59,31 @@ data class PhoneMicUiState(
     val isOverlayEnabled: Boolean = false,
     val showQrScanner: Boolean = false,
     val audioQuality: PhoneMicService.Companion.AudioQuality = PhoneMicService.Companion.AudioQuality.STUDIO_48K,
-    // Stream telemetry matched with Windows Receiver
+    // Upgraded Audio Settings (General / Audio / Appearance)
+    val sampleRateHz: Int = 48000,
+    val audioFormat: AudioFormatOption = AudioFormatOption.PCM_16BIT,
+    val channels: Int = 1,
+    val preferredMicId: Int = -1,
+    val availableMics: List<InputMicDevice> = listOf(
+        InputMicDevice(
+            id = -1,
+            name = "System Default",
+            typeLabel = "Automatic Selection",
+            kind = com.example.audio.MicDeviceKind.DEFAULT,
+            isSystemDefault = true
+        )
+    ),
+    val autoStartStreaming: Boolean = false,
+    val pushToTalkEnabled: Boolean = false,
+    val isPttPressed: Boolean = false,
+    val autoReconnectEnabled: Boolean = false,
+    val visualizerEnabled: Boolean = true,
+    val visualizerStyle: VisualizerStyle = VisualizerStyle.WAVEFORM,
+    // Stream telemetry matched with PC Receiver
     val packetsSent: Long = 0L,
     val bytesSent: Long = 0L,
     val packetRate: Float = 0f,
-    val receiverVersion: String = "Windows Receiver v${BuildConfig.VERSION_NAME}",
+    val receiverVersion: String = "Receiver v${BuildConfig.VERSION_NAME}",
     val targetAudioDevice: String = "CABLE Input (VB-Audio Virtual Cable)"
 )
 
@@ -74,6 +102,15 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         private const val PREF_KEEP_SCREEN_AWAKE = "keep_screen_awake"
         private const val PREF_OVERLAY = "floating_overlay"
         private const val PREF_AUDIO_QUALITY = "audio_quality"
+        private const val PREF_SAMPLE_RATE = "sample_rate_hz"
+        private const val PREF_AUDIO_FORMAT = "audio_format"
+        private const val PREF_CHANNELS = "channels"
+        private const val PREF_PREFERRED_MIC_ID = "preferred_mic_id"
+        private const val PREF_AUTO_START = "auto_start_streaming"
+        private const val PREF_PUSH_TO_TALK = "push_to_talk_enabled"
+        private const val PREF_AUTO_RECONNECT = "auto_reconnect_enabled"
+        private const val PREF_VISUALIZER_ENABLED = "visualizer_enabled"
+        private const val PREF_VISUALIZER_STYLE = "visualizer_style"
 
         private val IPV4_PATTERN = Pattern.compile(
             "^((25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\.){3}(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)$"
@@ -84,22 +121,35 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     private val _uiState = MutableStateFlow(loadInitialState())
     val uiState: StateFlow<PhoneMicUiState> = _uiState.asStateFlow()
 
-    // Isolated high-frequency audio peak level flow:
-    // Prevents recomposing the entire screen 12x/sec during streaming on budget devices like Galaxy A10s!
+    // Isolated high-frequency flows: prevents recomposing screen outside Visualizer / VU meter!
     private val _audioDb = MutableStateFlow(-60f)
     val audioDb: StateFlow<Float> = _audioDb.asStateFlow()
 
+    private val _visualizerSnapshot = MutableStateFlow(VisualizerSnapshot())
+    val visualizerSnapshot: StateFlow<VisualizerSnapshot> = _visualizerSnapshot.asStateFlow()
+
     private var phoneMicService: PhoneMicService? = null
     private var serviceBound = false
+    private var autoStartTriggered = false
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private var elapsedTickerRunning = false
+
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+            refreshAvailableMics()
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+            refreshAvailableMics()
+        }
+    }
 
     private val elapsedTicker = object : Runnable {
         override fun run() {
             val startedAt = phoneMicService?.getStreamingStartedAt() ?: 0L
             if (startedAt > 0L) {
-                val sec = Math.max(0L, (SystemClock.elapsedRealtime() - startedAt) / 1000L)
+                val sec = max(0L, (SystemClock.elapsedRealtime() - startedAt) / 1000L)
                 _uiState.update { it.copy(elapsedSeconds = sec) }
             }
             if (elapsedTickerRunning) {
@@ -113,11 +163,15 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             val localBinder = binder as? PhoneMicService.LocalBinder
             phoneMicService = localBinder?.service
             serviceBound = true
-            phoneMicService?.registerListener(this@PhoneMicViewModel)
-
-            val service = phoneMicService
-            if (service != null && service.isRunning()) {
-                startElapsedTicker()
+            phoneMicService?.let { svc ->
+                svc.registerListener(this@PhoneMicViewModel)
+                val st = _uiState.value
+                svc.setVisualizerEnabled(st.visualizerEnabled)
+                svc.setAutoReconnect(st.autoReconnectEnabled)
+                svc.setPushToTalkConfig(st.pushToTalkEnabled, st.isPttPressed)
+                if (svc.isRunning()) {
+                    startElapsedTicker()
+                }
             }
         }
 
@@ -125,11 +179,13 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             serviceBound = false
             phoneMicService = null
             stopElapsedTicker()
+            _visualizerSnapshot.value = VisualizerSnapshot()
             _uiState.update {
                 it.copy(
                     isRunning = false,
                     isPaused = false,
                     isConnected = false,
+                    isPttPressed = false,
                     statusMessage = "Service disconnected",
                     audioLevel = 0f,
                     audioDb = -60f,
@@ -143,9 +199,13 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     }
 
     init {
-        // Defer service binding to Activity.onStart to prevent cold launch freeze
         checkBatteryOptimization()
         checkPermissions()
+        refreshAvailableMics()
+        try {
+            val am = application.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            am?.registerAudioDeviceCallback(audioDeviceCallback, uiHandler)
+        } catch (_: Exception) {}
     }
 
     private fun loadInitialState(): PhoneMicUiState {
@@ -161,6 +221,18 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         val savedOverlay = prefs.getBoolean(PREF_OVERLAY, false)
         val savedQualityId = prefs.getString(PREF_AUDIO_QUALITY, PhoneMicService.Companion.AudioQuality.STUDIO_48K.id)
         val savedQuality = PhoneMicService.Companion.AudioQuality.fromId(savedQualityId)
+
+        val savedRate = prefs.getInt(PREF_SAMPLE_RATE, savedQuality.sampleRate)
+            .takeIf { it in AudioProtocol.SUPPORTED_SAMPLE_RATES } ?: 48000
+        val rawFormat = AudioFormatOption.fromId(prefs.getString(PREF_AUDIO_FORMAT, AudioFormatOption.PCM_16BIT.id))
+        val savedFormat = if (rawFormat.isSupportedOnDevice) rawFormat else AudioFormatOption.PCM_16BIT
+        val savedChannels = if (prefs.getInt(PREF_CHANNELS, 1) == 2) 2 else 1
+        val savedPreferredMicId = prefs.getInt(PREF_PREFERRED_MIC_ID, -1)
+        val savedAutoStart = prefs.getBoolean(PREF_AUTO_START, false)
+        val savedPtt = prefs.getBoolean(PREF_PUSH_TO_TALK, false)
+        val savedAutoReconnect = prefs.getBoolean(PREF_AUTO_RECONNECT, false)
+        val savedVizEnabled = prefs.getBoolean(PREF_VISUALIZER_ENABLED, true)
+        val savedVizStyle = VisualizerStyle.fromId(prefs.getString(PREF_VISUALIZER_STYLE, VisualizerStyle.WAVEFORM.id))
 
         val app = getApplication<Application>()
         val hasMic = ContextCompat.checkSelfPermission(
@@ -190,6 +262,15 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             micMode = savedMic,
             gain = savedGain,
             audioQuality = savedQuality,
+            sampleRateHz = savedRate,
+            audioFormat = savedFormat,
+            channels = savedChannels,
+            preferredMicId = savedPreferredMicId,
+            autoStartStreaming = savedAutoStart,
+            pushToTalkEnabled = savedPtt,
+            autoReconnectEnabled = savedAutoReconnect,
+            visualizerEnabled = savedVizEnabled,
+            visualizerStyle = savedVizStyle,
             keepScreenAwake = savedKeepScreenAwake,
             isOverlayEnabled = savedOverlay,
             hasMicPermission = hasMic,
@@ -215,6 +296,18 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             phoneMicService = null
         }
         stopElapsedTicker()
+    }
+
+    fun refreshAvailableMics() {
+        val list = AudioProtocol.queryInputMicDevices(getApplication())
+        _uiState.update { current ->
+            val stillExists = current.preferredMicId == -1 || list.any { it.id == current.preferredMicId }
+            current.copy(
+                availableMics = list,
+                preferredMicId = if (stillExists) current.preferredMicId else -1
+            )
+        }
+        savePreferences()
     }
 
     fun checkBatteryOptimization() {
@@ -263,8 +356,43 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         savePreferences()
     }
 
+    fun setPreferredMicDevice(deviceId: Int) {
+        _uiState.update { it.copy(preferredMicId = deviceId) }
+        savePreferences()
+    }
+
     fun setAudioQuality(quality: PhoneMicService.Companion.AudioQuality) {
-        _uiState.update { it.copy(audioQuality = quality) }
+        _uiState.update {
+            it.copy(
+                audioQuality = quality,
+                sampleRateHz = quality.sampleRate,
+                channels = 1,
+                audioFormat = AudioFormatOption.PCM_16BIT
+            )
+        }
+        savePreferences()
+    }
+
+    fun setSampleRate(rateHz: Int) {
+        if (rateHz !in AudioProtocol.SUPPORTED_SAMPLE_RATES) return
+        val syncedQuality = when (rateHz) {
+            16000 -> PhoneMicService.Companion.AudioQuality.LOW_BANDWIDTH_16K
+            24000 -> PhoneMicService.Companion.AudioQuality.BALANCED_24K
+            else -> PhoneMicService.Companion.AudioQuality.STUDIO_48K
+        }
+        _uiState.update { it.copy(sampleRateHz = rateHz, audioQuality = syncedQuality) }
+        savePreferences()
+    }
+
+    fun setAudioFormat(format: AudioFormatOption) {
+        val safeFmt = if (format.isSupportedOnDevice) format else AudioFormatOption.PCM_16BIT
+        _uiState.update { it.copy(audioFormat = safeFmt) }
+        savePreferences()
+    }
+
+    fun setChannels(channels: Int) {
+        val safeCh = if (channels == 2) 2 else 1
+        _uiState.update { it.copy(channels = safeCh) }
         savePreferences()
     }
 
@@ -277,6 +405,53 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     fun setKeepScreenAwake(awake: Boolean) {
         _uiState.update { it.copy(keepScreenAwake = awake) }
         savePreferences()
+    }
+
+    fun setAutoStartStreaming(enabled: Boolean) {
+        _uiState.update { it.copy(autoStartStreaming = enabled) }
+        savePreferences()
+    }
+
+    fun setPushToTalkEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(pushToTalkEnabled = enabled, isPttPressed = false) }
+        phoneMicService?.setPushToTalkConfig(enabled, false)
+        savePreferences()
+    }
+
+    fun setPttPressed(pressed: Boolean) {
+        _uiState.update { current ->
+            if (!current.pushToTalkEnabled || current.isPttPressed == pressed) return@update current
+            current.copy(isPttPressed = pressed)
+        }
+        val state = _uiState.value
+        phoneMicService?.setPushToTalkConfig(state.pushToTalkEnabled, pressed)
+    }
+
+    fun setAutoReconnectEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(autoReconnectEnabled = enabled) }
+        phoneMicService?.setAutoReconnect(enabled)
+        savePreferences()
+    }
+
+    fun setVisualizerEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(visualizerEnabled = enabled) }
+        phoneMicService?.setVisualizerEnabled(enabled)
+        if (!enabled) {
+            _visualizerSnapshot.value = VisualizerSnapshot()
+        }
+        savePreferences()
+    }
+
+    fun setVisualizerStyle(style: VisualizerStyle) {
+        _uiState.update { it.copy(visualizerStyle = style) }
+        savePreferences()
+    }
+
+    fun setSettingsVisible(visible: Boolean) {
+        if (visible) {
+            refreshAvailableMics()
+        }
+        _uiState.update { it.copy(showSettings = visible) }
     }
 
     fun checkPermissions(context: Context = getApplication()) {
@@ -303,6 +478,20 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
                 hasNotificationPermission = hasNotif,
                 hasCameraPermission = hasCam
             )
+        }
+    }
+
+    fun maybeAutoStart(context: Context) {
+        if (autoStartTriggered) return
+        autoStartTriggered = true
+        val state = _uiState.value
+        if (state.autoStartStreaming &&
+            !state.isRunning &&
+            state.hasMicPermission &&
+            isValidIp(state.ip) &&
+            isValidPort(state.port)
+        ) {
+            startStreaming(context)
         }
     }
 
@@ -356,9 +545,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(showGuideDialog = visible) }
     }
 
-    fun isValidIp(ip: String): Boolean {
-        return IPV4_PATTERN.matcher(ip).matches()
-    }
+    fun isValidIp(ip: String): Boolean = IPV4_PATTERN.matcher(ip).matches()
 
     fun isValidPort(port: String): Boolean {
         val p = port.toIntOrNull() ?: return false
@@ -392,6 +579,14 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             putExtra(PhoneMicService.EXTRA_MIC, state.micMode)
             putExtra(PhoneMicService.EXTRA_GAIN, state.gain)
             putExtra(PhoneMicService.EXTRA_QUALITY, state.audioQuality.id)
+            putExtra(PhoneMicService.EXTRA_SAMPLE_RATE, state.sampleRateHz)
+            putExtra(PhoneMicService.EXTRA_AUDIO_FORMAT, state.audioFormat.id)
+            putExtra(PhoneMicService.EXTRA_CHANNELS, state.channels)
+            putExtra(PhoneMicService.EXTRA_PREFERRED_MIC_ID, state.preferredMicId)
+            putExtra(PhoneMicService.EXTRA_AUTO_RECONNECT, state.autoReconnectEnabled)
+            putExtra(PhoneMicService.EXTRA_PTT_MODE, state.pushToTalkEnabled)
+            putExtra(PhoneMicService.EXTRA_PTT_PRESSED, state.isPttPressed)
+            putExtra(PhoneMicService.EXTRA_VISUALIZER_ENABLED, state.visualizerEnabled)
         }
 
         try {
@@ -403,6 +598,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun stopStreaming(context: Context) {
+        autoStartTriggered = true
         if (serviceBound && phoneMicService != null) {
             phoneMicService?.requestStop()
         } else {
@@ -412,11 +608,14 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             context.startService(intent)
         }
         stopElapsedTicker()
+        _audioDb.value = -60f
+        _visualizerSnapshot.value = VisualizerSnapshot()
         _uiState.update {
             it.copy(
                 isRunning = false,
                 isPaused = false,
                 isConnected = false,
+                isPttPressed = false,
                 statusMessage = "Streaming stopped",
                 audioLevel = 0f,
                 audioDb = -60f,
@@ -513,6 +712,15 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             .putString(PREF_MIC, state.micMode)
             .putFloat(PREF_GAIN, state.gain)
             .putString(PREF_AUDIO_QUALITY, state.audioQuality.id)
+            .putInt(PREF_SAMPLE_RATE, state.sampleRateHz)
+            .putString(PREF_AUDIO_FORMAT, state.audioFormat.id)
+            .putInt(PREF_CHANNELS, state.channels)
+            .putInt(PREF_PREFERRED_MIC_ID, state.preferredMicId)
+            .putBoolean(PREF_AUTO_START, state.autoStartStreaming)
+            .putBoolean(PREF_PUSH_TO_TALK, state.pushToTalkEnabled)
+            .putBoolean(PREF_AUTO_RECONNECT, state.autoReconnectEnabled)
+            .putBoolean(PREF_VISUALIZER_ENABLED, state.visualizerEnabled)
+            .putString(PREF_VISUALIZER_STYLE, state.visualizerStyle.id)
             .putBoolean(PREF_KEEP_SCREEN_AWAKE, state.keepScreenAwake)
             .putBoolean(PREF_OVERLAY, state.isOverlayEnabled)
             .apply()
@@ -524,6 +732,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
                 isRunning = running,
                 isPaused = paused,
                 isConnected = connected,
+                isPttPressed = if (running) it.isPttPressed else false,
                 statusMessage = if (!running && message == "Idle") "Ready to connect" else message
             )
         }
@@ -533,6 +742,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         } else {
             stopElapsedTicker()
             _audioDb.value = -60f
+            _visualizerSnapshot.value = VisualizerSnapshot()
             _uiState.update {
                 it.copy(
                     audioLevel = 0f,
@@ -545,9 +755,11 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onAudioLevel(normalizedLevel: Float, peakDb: Float) {
-        // High-frequency stream level: only update the isolated StateFlow!
-        // Does not trigger recomposition of the main screen or text fields!
         _audioDb.value = peakDb
+    }
+
+    override fun onVisualizerData(snapshot: VisualizerSnapshot) {
+        _visualizerSnapshot.value = snapshot
     }
 
     override fun onTelemetry(packetsSent: Long, bytesSent: Long, packetRate: Float) {
@@ -562,6 +774,10 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
 
     override fun onCleared() {
         stopElapsedTicker()
+        try {
+            val am = getApplication<Application>().getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            am?.unregisterAudioDeviceCallback(audioDeviceCallback)
+        } catch (_: Exception) {}
         super.onCleared()
     }
 }

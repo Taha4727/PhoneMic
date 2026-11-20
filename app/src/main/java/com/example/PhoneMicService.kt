@@ -5,10 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.media.AudioFormat
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.net.wifi.WifiManager
@@ -18,9 +20,17 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.example.audio.AudioChannelOption
+import com.example.audio.AudioFormatOption
+import com.example.audio.AudioFrameProcessor
+import com.example.audio.AudioProtocol
+import com.example.audio.VisualizerSnapshot
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.io.IOException
 import java.io.OutputStream
 import java.net.DatagramPacket
@@ -30,13 +40,9 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.Arrays
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
-import kotlin.math.abs
-import kotlin.math.log10
 import kotlin.math.max
 
 class PhoneMicService : Service() {
@@ -45,6 +51,7 @@ class PhoneMicService : Service() {
         fun onStateChanged(running: Boolean, paused: Boolean, connected: Boolean, message: String)
         fun onAudioLevel(normalizedLevel: Float, peakDb: Float)
         fun onTelemetry(packetsSent: Long, bytesSent: Long, packetRate: Float)
+        fun onVisualizerData(snapshot: VisualizerSnapshot) {}
     }
 
     companion object {
@@ -66,6 +73,14 @@ class PhoneMicService : Service() {
         const val EXTRA_MIC = "mic"
         const val EXTRA_GAIN = "gain"
         const val EXTRA_QUALITY = "quality"
+        const val EXTRA_SAMPLE_RATE = "sample_rate"
+        const val EXTRA_AUDIO_FORMAT = "audio_format"
+        const val EXTRA_CHANNELS = "channels"
+        const val EXTRA_PREFERRED_MIC_ID = "preferred_mic_id"
+        const val EXTRA_AUTO_RECONNECT = "auto_reconnect"
+        const val EXTRA_PTT_MODE = "ptt_mode"
+        const val EXTRA_PTT_PRESSED = "ptt_pressed"
+        const val EXTRA_VISUALIZER_ENABLED = "visualizer_enabled"
 
         const val QUALITY_STUDIO_48K = "48K"
         const val QUALITY_BALANCED_24K = "24K"
@@ -87,7 +102,8 @@ class PhoneMicService : Service() {
             val packetSize: Int get() = frameSamples * 2
 
             companion object {
-                fun fromId(id: String?): AudioQuality = values().firstOrNull { it.id.equals(id, ignoreCase = true) } ?: STUDIO_48K
+                fun fromId(id: String?): AudioQuality =
+                    entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: STUDIO_48K
             }
         }
 
@@ -97,7 +113,6 @@ class PhoneMicService : Service() {
         const val MIC_RAW = "VOICE_RECOGNITION"
         const val MIC_CAMCORDER = "CAMCORDER"
 
-        // 480 samples * 2 bytes = 960 bytes = 10 ms at 48 kHz mono 16-bit
         private const val SAMPLE_RATE = 48000
         private const val PACKET_SIZE = 960
 
@@ -106,7 +121,6 @@ class PhoneMicService : Service() {
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val TAG = "PhoneMic"
 
-        // Bidirectional remote commands from Windows Receiver
         private const val CMD_PAUSE = "PMP1"
         private const val CMD_RESUME = "PMR1"
 
@@ -117,16 +131,17 @@ class PhoneMicService : Service() {
             val message: String = "Idle"
         )
 
-        private val _serviceSnapshot = kotlinx.coroutines.flow.MutableStateFlow(ServiceSnapshot())
-        val serviceSnapshot: kotlinx.coroutines.flow.StateFlow<ServiceSnapshot> = _serviceSnapshot
+        private val _serviceSnapshot = MutableStateFlow(ServiceSnapshot())
+        val serviceSnapshot: StateFlow<ServiceSnapshot> = _serviceSnapshot
 
-        private val _audioLevelFlow = kotlinx.coroutines.flow.MutableStateFlow(0f)
-        val audioLevelFlow: kotlinx.coroutines.flow.StateFlow<Float> = _audioLevelFlow
+        private val _audioLevelFlow = MutableStateFlow(0f)
+        val audioLevelFlow: StateFlow<Float> = _audioLevelFlow
     }
 
     private val binder = LocalBinder()
     private val listeners = CopyOnWriteArrayList<Listener>()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val frameProcessor = AudioFrameProcessor()
 
     private var recorder: AudioRecord? = null
     private var audioThread: Thread? = null
@@ -147,12 +162,23 @@ class PhoneMicService : Service() {
     @Volatile private var streamingStartedAt = 0L
     @Volatile private var gain = 1.0f
 
+    @Volatile private var autoReconnect = false
+    @Volatile private var pttMode = false
+    @Volatile private var pttPressed = false
+    @Volatile private var visualizerEnabled = true
+
     @Volatile private var totalPacketsSent = 0L
     @Volatile private var totalBytesSent = 0L
 
-    // Throttling for UI audio level updates (80ms eliminates frame drops on Android 7.1.1)
     private var lastLevelReportTime = 0L
     private var lastTelemetryReportTime = 0L
+
+    private var currentQuality = AudioQuality.STUDIO_48K
+    private var actualSampleRate = SAMPLE_RATE
+    private var actualChannels = AudioChannelOption.MONO
+    private var actualFormat = AudioFormatOption.PCM_16BIT
+    private var useExtendedPm04 = false
+    private var needsResampling44k = false
 
     inner class LocalBinder : Binder() {
         val service: PhoneMicService
@@ -162,7 +188,6 @@ class PhoneMicService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     fun getStreamingStartedAt(): Long = streamingStartedAt
-
     fun isRunning(): Boolean = running
     fun isPaused(): Boolean = paused
     fun isConnected(): Boolean = connected
@@ -173,6 +198,27 @@ class PhoneMicService : Service() {
 
     fun setGain(newGain: Float) {
         gain = newGain.coerceIn(0.5f, 4.0f)
+    }
+
+    fun setPushToTalkConfig(enabled: Boolean, pressed: Boolean) {
+        pttMode = enabled
+        pttPressed = pressed
+        if (running && pttMode && !paused) {
+            if (pttPressed) {
+                setState(connected, "PTT Transmitting")
+            } else {
+                setState(connected, "PTT Ready (Hold to Talk)")
+                reportAudioLevel(0f, -60f, null)
+            }
+        }
+    }
+
+    fun setAutoReconnect(enabled: Boolean) {
+        autoReconnect = enabled
+    }
+
+    fun setVisualizerEnabled(enabled: Boolean) {
+        visualizerEnabled = enabled
     }
 
     // ========================================================
@@ -218,16 +264,20 @@ class PhoneMicService : Service() {
         }
     }
 
-    private fun reportAudioLevel(level: Float, db: Float) {
+    private fun reportAudioLevel(level: Float, db: Float, snapshot: VisualizerSnapshot? = null) {
         _audioLevelFlow.value = level
         val now = SystemClock.uptimeMillis()
         if (now - lastLevelReportTime < 80) {
             return
         }
         lastLevelReportTime = now
+        val snapToPost = snapshot ?: if (visualizerEnabled) VisualizerSnapshot(level = level, peakDb = db) else null
         mainHandler.post {
             for (listener in listeners) {
                 listener.onAudioLevel(level, db)
+                if (snapToPost != null) {
+                    listener.onVisualizerData(snapToPost)
+                }
             }
         }
     }
@@ -279,17 +329,14 @@ class PhoneMicService : Service() {
             requestStop()
             return START_NOT_STICKY
         }
-
         if (ACTION_PAUSE == action) {
             pauseStreaming()
             return START_NOT_STICKY
         }
-
         if (ACTION_RESUME == action) {
             resumeStreaming()
             return START_NOT_STICKY
         }
-
         if (ACTION_TOGGLE_PAUSE == action) {
             if (paused) resumeStreaming() else pauseStreaming()
             return START_NOT_STICKY
@@ -312,8 +359,28 @@ class PhoneMicService : Service() {
             val mic = intent.getStringExtra(EXTRA_MIC) ?: MIC_STANDARD
             val qualityStr = intent.getStringExtra(EXTRA_QUALITY) ?: QUALITY_STUDIO_48K
             val quality = AudioQuality.fromId(qualityStr)
+            val requestedRate = intent.getIntExtra(EXTRA_SAMPLE_RATE, quality.sampleRate)
+            val requestedFmt = AudioFormatOption.fromId(intent.getStringExtra(EXTRA_AUDIO_FORMAT))
+            val requestedCh = AudioChannelOption.fromCount(intent.getIntExtra(EXTRA_CHANNELS, 1))
+            val preferredMicId = intent.getIntExtra(EXTRA_PREFERRED_MIC_ID, -1)
+            autoReconnect = intent.getBooleanExtra(EXTRA_AUTO_RECONNECT, false)
+            pttMode = intent.getBooleanExtra(EXTRA_PTT_MODE, false)
+            pttPressed = intent.getBooleanExtra(EXTRA_PTT_PRESSED, false)
+            visualizerEnabled = intent.getBooleanExtra(EXTRA_VISUALIZER_ENABLED, true)
             gain = intent.getFloatExtra(EXTRA_GAIN, 1.0f).coerceIn(0.5f, 4.0f)
-            startStreaming(ip, port, transport, connection, mic, quality)
+
+            startStreaming(
+                ip = ip,
+                port = port,
+                transport = transport,
+                connection = connection,
+                micMode = mic,
+                quality = quality,
+                requestedRate = requestedRate,
+                requestedFormat = requestedFmt,
+                requestedChannels = requestedCh,
+                preferredMicId = preferredMicId
+            )
         }
 
         return START_NOT_STICKY
@@ -329,47 +396,58 @@ class PhoneMicService : Service() {
         if (running) {
             paused = true
             setState(false, "Paused")
-            reportAudioLevel(0f, -60f)
+            reportAudioLevel(0f, -60f, null)
         }
     }
 
     fun resumeStreaming() {
         if (running) {
             paused = false
-            setState(connected, if (connected) connectedLabel else "Streaming")
+            val msg = if (pttMode && !pttPressed) "PTT Ready (Hold to Talk)" else if (connected) connectedLabel else "Streaming"
+            setState(connected, msg)
         }
     }
 
     // ========================================================
-    // STREAM CONTROL
+    // RECORDER INITIALIZATION & RESAMPLING
     // ========================================================
 
-    private var currentQuality = AudioQuality.STUDIO_48K
-    private var actualSampleRate = SAMPLE_RATE
-    private var needsResampling44k = false
-
-    private fun resolveMicSource(mode: String): Int {
-        return when (mode) {
-            MIC_UNPROCESSED -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    MediaRecorder.AudioSource.UNPROCESSED
-                } else {
-                    MediaRecorder.AudioSource.MIC
-                }
+    private fun applyPreferredMicDevice(rec: AudioRecord, preferredMicId: Int) {
+        if (preferredMicId < 0) return
+        try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            val targetDevice = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                .firstOrNull { it.isSource && it.id == preferredMicId }
+            if (targetDevice != null) {
+                val ok = rec.setPreferredDevice(targetDevice)
+                Log.i(TAG, "setPreferredDevice(id=$preferredMicId, type=${targetDevice.type}) -> $ok")
             }
-            MIC_RAW -> MediaRecorder.AudioSource.VOICE_RECOGNITION
-            MIC_CAMCORDER -> MediaRecorder.AudioSource.CAMCORDER
-            MIC_CALL -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
-            MIC_STANDARD -> MediaRecorder.AudioSource.MIC
-            else -> MediaRecorder.AudioSource.MIC
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed setPreferredDevice: ${e.message}")
         }
     }
 
-    private fun createAudioRecorder(requestedSource: Int, targetRate: Int): AudioRecord? {
-        val sampleRates = when (targetRate) {
-            16000 -> intArrayOf(16000, 48000)
-            24000 -> intArrayOf(24000, 16000, 48000)
-            else -> intArrayOf(48000, 44100)
+    private fun buildRateFallbackList(requestedRate: Int): IntArray {
+        return intArrayOf(requestedRate, 48000, 44100, 16000).distinct().toIntArray()
+    }
+
+    private fun createAudioRecorder(
+        requestedSource: Int,
+        preferredMicId: Int,
+        targetRate: Int,
+        targetChannels: AudioChannelOption,
+        targetFormat: AudioFormatOption
+    ): AudioRecord? {
+        val sampleRates = buildRateFallbackList(targetRate)
+        val formats = if (targetFormat == AudioFormatOption.PCM_16BIT) {
+            listOf(AudioFormatOption.PCM_16BIT)
+        } else {
+            listOf(targetFormat, AudioFormatOption.PCM_16BIT)
+        }
+        val channels = if (targetChannels == AudioChannelOption.MONO) {
+            listOf(AudioChannelOption.MONO)
+        } else {
+            listOf(targetChannels, AudioChannelOption.MONO)
         }
         val sourcesToTry = intArrayOf(
             requestedSource,
@@ -377,45 +455,66 @@ class PhoneMicService : Service() {
             MediaRecorder.AudioSource.DEFAULT
         ).distinct().toIntArray()
 
-        val packetBytes = currentQuality.packetSize
-        for (rate in sampleRates) {
-            val minBuffer = AudioRecord.getMinBufferSize(
-                rate,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT
-            )
-            if (minBuffer <= 0) continue
-
-            val bufferSize = max(minBuffer * 2, packetBytes * 4)
-
-            for (source in sourcesToTry) {
-                try {
-                    val rec = AudioRecord(
-                        source,
+        for (fmt in formats) {
+            if (!fmt.isSupportedOnDevice) continue
+            for (ch in channels) {
+                for (rate in sampleRates) {
+                    val minBuffer = AudioRecord.getMinBufferSize(
                         rate,
-                        AudioFormat.CHANNEL_IN_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT,
-                        bufferSize
+                        ch.androidMask,
+                        fmt.toAndroidEncoding()
                     )
-                    if (rec.state == AudioRecord.STATE_INITIALIZED) {
-                        actualSampleRate = rate
-                        needsResampling44k = (rate == 44100)
-                        Log.i(TAG, "AudioRecord initialized: source=$source, rate=$rate, bufferSize=$bufferSize")
-                        return rec
-                    } else {
-                        rec.release()
+                    if (minBuffer <= 0) continue
+
+                    val frameBytes = AudioProtocol.framePayloadBytes(rate, ch.count, fmt)
+                    val bufferSize = max(minBuffer * 2, frameBytes * 4)
+
+                    for (source in sourcesToTry) {
+                        try {
+                            val rec = AudioRecord(
+                                source,
+                                rate,
+                                ch.androidMask,
+                                fmt.toAndroidEncoding(),
+                                bufferSize
+                            )
+                            if (rec.state == AudioRecord.STATE_INITIALIZED) {
+                                applyPreferredMicDevice(rec, preferredMicId)
+                                actualSampleRate = rate
+                                actualChannels = ch
+                                actualFormat = fmt
+                                val wantsLegacy48k = targetRate == 48000 &&
+                                    targetChannels == AudioChannelOption.MONO &&
+                                    targetFormat == AudioFormatOption.PCM_16BIT
+                                needsResampling44k = wantsLegacy48k &&
+                                    rate == 44100 &&
+                                    ch == AudioChannelOption.MONO &&
+                                    fmt == AudioFormatOption.PCM_16BIT
+                                val effectiveRate = if (needsResampling44k) 48000 else rate
+                                useExtendedPm04 = !AudioProtocol.isLegacyStandardStream(
+                                    effectiveRate,
+                                    ch.count,
+                                    fmt
+                                )
+                                Log.i(
+                                    TAG,
+                                    "AudioRecord initialized: source=$source, mic=$preferredMicId, rate=$rate, ch=${ch.count}, fmt=${fmt.id}, pm04=$useExtendedPm04, bufferSize=$bufferSize"
+                                )
+                                return rec
+                            } else {
+                                rec.release()
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed AudioRecord source=$source rate=$rate ch=${ch.count} fmt=${fmt.id}: ${e.message}")
+                        }
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed AudioRecord source=$source, rate=$rate: ${e.message}")
                 }
             }
         }
         return null
     }
 
-
     private fun resample441To480(src: ByteArray, dst: ByteArray) {
-        // src has 441 16-bit samples (882 bytes), dst has 480 16-bit samples (960 bytes)
         val step = 440f / 479f
         for (i in 0 until 480) {
             val pos = i * step
@@ -445,6 +544,10 @@ class PhoneMicService : Service() {
         buf[byteIdx + 1] = ((value shr 8) and 0xFF).toByte()
     }
 
+    // ========================================================
+    // STREAM START / STOP & AUTO-RECONNECT LOOP
+    // ========================================================
+
     @Synchronized
     private fun startStreaming(
         ip: String,
@@ -452,7 +555,11 @@ class PhoneMicService : Service() {
         transport: String,
         connection: String,
         micMode: String,
-        quality: AudioQuality = AudioQuality.STUDIO_48K
+        quality: AudioQuality = AudioQuality.STUDIO_48K,
+        requestedRate: Int = quality.sampleRate,
+        requestedFormat: AudioFormatOption = AudioFormatOption.PCM_16BIT,
+        requestedChannels: AudioChannelOption = AudioChannelOption.MONO,
+        preferredMicId: Int = -1
     ) {
         if (running) return
 
@@ -461,18 +568,14 @@ class PhoneMicService : Service() {
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
-            stateMessage = "Microphone permission denied"
-            sendState()
-            updateNotification(stateMessage)
-            stopForegroundCompat()
-            stopSelf()
+            failStart("Microphone permission denied")
             return
         }
 
         stopRequested = false
 
-        val micSource = resolveMicSource(micMode)
-        recorder = createAudioRecorder(micSource, quality.sampleRate)
+        val micSource = AudioProtocol.resolveAudioSource(micMode)
+        recorder = createAudioRecorder(micSource, preferredMicId, requestedRate, requestedChannels, requestedFormat)
 
         val rec = recorder
         if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) {
@@ -482,8 +585,8 @@ class PhoneMicService : Service() {
             return
         }
 
-        // Align currentQuality to the actual rate that successfully opened
-        currentQuality = when (actualSampleRate) {
+        val streamRate = if (needsResampling44k) 48000 else actualSampleRate
+        currentQuality = when (streamRate) {
             16000 -> AudioQuality.LOW_BANDWIDTH_16K
             24000 -> AudioQuality.BALANCED_24K
             else -> AudioQuality.STUDIO_48K
@@ -503,14 +606,60 @@ class PhoneMicService : Service() {
         val bindWifi = CONNECTION_WIFI == connection
         val useUdp = TRANSPORT_UDP == transport
         val myGeneration = ++generation
+        val cleanIp = ip.trim()
 
         audioThread = Thread({
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+            } catch (_: Exception) {}
             acquireLocks(bindWifi)
             try {
-                if (useUdp) {
-                    udpLoop(ip.trim(), port, myGeneration)
-                } else {
-                    tcpLoop(ip.trim(), port, myGeneration)
+                var attempt = 0
+                var backoffMs = 1000L
+                while (running && !stopRequested && myGeneration == generation) {
+                    val attemptStarted = SystemClock.elapsedRealtime()
+                    if (recorder == null || recorder?.state != AudioRecord.STATE_INITIALIZED) {
+                        recorder = createAudioRecorder(
+                            micSource,
+                            preferredMicId,
+                            requestedRate,
+                            requestedChannels,
+                            requestedFormat
+                        )
+                    }
+                    val activeRec = recorder
+                    if (activeRec == null || activeRec.state != AudioRecord.STATE_INITIALIZED) {
+                        handleStreamError(IOException("Microphone unavailable"), myGeneration)
+                        break
+                    }
+
+                    val cleanExit = if (useUdp) {
+                        udpLoop(cleanIp, port, myGeneration, micSource, preferredMicId)
+                    } else {
+                        tcpLoop(cleanIp, port, myGeneration, micSource, preferredMicId)
+                    }
+
+                    if (cleanExit || !autoReconnect || stopRequested || myGeneration != generation) {
+                        break
+                    }
+
+                    if (SystemClock.elapsedRealtime() - attemptStarted > 5000L) {
+                        backoffMs = 1000L
+                        attempt = 0
+                    }
+                    attempt++
+                    val waitSec = max(1, (backoffMs / 1000L).toInt())
+                    setState(false, "Reconnecting in ${waitSec}s (#$attempt)…")
+                    var slept = 0L
+                    while (running && !stopRequested && myGeneration == generation && slept < backoffMs) {
+                        try {
+                            Thread.sleep(100L)
+                        } catch (_: InterruptedException) {
+                            break
+                        }
+                        slept += 100L
+                    }
+                    backoffMs = (backoffMs * 2L).coerceAtMost(10_000L)
                 }
             } finally {
                 releaseLocks()
@@ -538,22 +687,14 @@ class PhoneMicService : Service() {
             stateMessage = "Stopped"
             streamingStartedAt = 0L
             sendState()
-            reportAudioLevel(0f, -60f)
+            reportAudioLevel(0f, -60f, VisualizerSnapshot())
             reportTelemetry(totalPacketsSent, totalBytesSent, 0f)
 
-            try {
-                tcpSocket?.close()
-            } catch (_: Exception) {}
+            try { tcpSocket?.close() } catch (_: Exception) {}
             tcpSocket = null
-
-            try {
-                udpSocket?.close()
-            } catch (_: Exception) {}
+            try { udpSocket?.close() } catch (_: Exception) {}
             udpSocket = null
-
-            try {
-                recorder?.stop()
-            } catch (_: Exception) {}
+            try { recorder?.stop() } catch (_: Exception) {}
 
             t = audioThread
             audioThread = null
@@ -561,9 +702,7 @@ class PhoneMicService : Service() {
 
         if (t != null) {
             t.interrupt()
-            try {
-                t.join(1000)
-            } catch (_: InterruptedException) {}
+            try { t.join(1000) } catch (_: InterruptedException) {}
         }
 
         synchronized(this) {
@@ -582,7 +721,7 @@ class PhoneMicService : Service() {
             connected = false
             paused = false
             streamingStartedAt = 0L
-            reportAudioLevel(0f, -60f)
+            reportAudioLevel(0f, -60f, VisualizerSnapshot())
             reportTelemetry(totalPacketsSent, totalBytesSent, 0f)
 
             if (!stopRequested && myGeneration == generation) {
@@ -604,54 +743,61 @@ class PhoneMicService : Service() {
         recorder = null
     }
 
-    // ========================================================
-    // AUDIO PROCESSING & LEVEL CALCULATION
-    // ========================================================
-
-    private fun processAudioBuffer(data: ByteArray, length: Int, currentGain: Float): Pair<Float, Float> {
-        var maxAmplitude = 0
-        val applyGain = abs(currentGain - 1.0f) > 0.05f
-
-        for (i in 0 until length - 1 step 2) {
-            val low = data[i].toInt() and 0xFF
-            val high = data[i + 1].toInt()
-            var sample = (high shl 8) or low
-            if (sample > 32767) sample -= 65536
-
-            if (applyGain) {
-                val amplified = (sample * currentGain).toInt().coerceIn(-32768, 32767)
-                data[i] = (amplified and 0xFF).toByte()
-                data[i + 1] = ((amplified shr 8) and 0xFF).toByte()
-                sample = amplified
+    private fun recoverSilentRecorder(preferredMicId: Int, frameBytes: Int) {
+        try {
+            recorder?.stop()
+            recorder?.release()
+            val recBufSize = max(frameBytes * 4, AudioRecord.getMinBufferSize(
+                actualSampleRate,
+                actualChannels.androidMask,
+                actualFormat.toAndroidEncoding()
+            ) * 2)
+            val newRec = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                actualSampleRate,
+                actualChannels.androidMask,
+                actualFormat.toAndroidEncoding(),
+                recBufSize
+            )
+            if (newRec.state == AudioRecord.STATE_INITIALIZED) {
+                applyPreferredMicDevice(newRec, preferredMicId)
+                recorder = newRec
+                newRec.startRecording()
+            } else {
+                newRec.release()
             }
-
-            val absSample = abs(sample)
-            if (absSample > maxAmplitude) {
-                maxAmplitude = absSample
-            }
-        }
-
-        val normalized = (maxAmplitude / 32767f).coerceIn(0f, 1f)
-        val db = if (maxAmplitude > 0) (20.0 * log10(maxAmplitude / 32767.0)).toFloat().coerceIn(-60f, 0f) else -60f
-        return Pair(normalized, db)
+        } catch (_: Exception) {}
     }
+
+    private fun effectiveStreamRate(): Int = if (needsResampling44k) 48000 else actualSampleRate
+
+    private fun effectivePayloadSize(): Int =
+        if (needsResampling44k) PACKET_SIZE
+        else AudioProtocol.framePayloadBytes(actualSampleRate, actualChannels.count, actualFormat)
+
+    private fun isEffectivelyMuted(): Boolean = paused || (pttMode && !pttPressed)
 
     // ========================================================
     // TCP
     // ========================================================
 
-    private fun tcpLoop(ip: String, port: Int, myGeneration: Int) {
+    private fun tcpLoop(
+        ip: String,
+        port: Int,
+        myGeneration: Int,
+        micSource: Int,
+        preferredMicId: Int
+    ): Boolean {
         var socket: Socket? = null
         try {
             socket = Socket()
             tcpSocket = socket
-
             socket.tcpNoDelay = true
             socket.connect(InetSocketAddress(ip, port), CONNECT_TIMEOUT_MS)
 
             val out: OutputStream = socket.getOutputStream()
             val input = socket.getInputStream()
-            
+
             val rec = recorder ?: throw IOException("AudioRecord not initialized")
             try {
                 if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
@@ -661,9 +807,9 @@ class PhoneMicService : Service() {
                 Log.w(TAG, "TCP startRecording retry: ${e.message}")
             }
 
-            setState(true, "Connected (TCP)")
+            val connStatus = if (pttMode && !pttPressed) "PTT Ready (Hold to Talk)" else "Connected (TCP)"
+            setState(true, connStatus)
 
-            // Remote control listener thread for incoming commands from Windows Receiver
             val ctrlThread = Thread({
                 val cmdBuf = ByteArray(4)
                 while (running && !stopRequested && !socket.isClosed && myGeneration == generation) {
@@ -684,8 +830,6 @@ class PhoneMicService : Service() {
                         } else {
                             break
                         }
-                    } catch (_: SocketException) {
-                        break
                     } catch (_: Exception) {
                         break
                     }
@@ -694,28 +838,39 @@ class PhoneMicService : Service() {
             ctrlThread.isDaemon = true
             ctrlThread.start()
 
-            val packetSize = currentQuality.packetSize
+            val streamRate = effectiveStreamRate()
+            val payloadSize = effectivePayloadSize()
+            val headerSize = if (useExtendedPm04) AudioProtocol.PM04_HEADER_SIZE else 0
             val raw44k = if (needsResampling44k) ByteArray(882) else ByteArray(0)
-            val data = ByteArray(packetSize)
-            val silence = ByteArray(packetSize)
+            val data = ByteArray(payloadSize)
+            val packet = if (headerSize > 0) ByteArray(headerSize + payloadSize) else ByteArray(0)
+            val silence = ByteArray(payloadSize)
+            AudioProtocol.fillSilence(silence, actualFormat)
+
+            var sequence = 0
             var packetsInWindow = 0
             var windowStart = SystemClock.uptimeMillis()
             var consecutiveSilence = 0
 
             while (running && !stopRequested && !socket.isClosed && myGeneration == generation) {
-                if (paused) {
-                    if (socket.isClosed || stopRequested || !running) break
-                    try {
-                        out.write(silence)
-                    } catch (se: SocketException) {
-                        if (stopRequested || !running || socket.isClosed || myGeneration != generation) {
-                            break
-                        }
-                        throw se
+                val activeMuted = isEffectivelyMuted()
+                if (activeMuted) {
+                    consecutiveSilence = 0
+                    // Flush stale samples while muted/PTT released by reading or sending silence rhythmically
+                    val writeLen = if (useExtendedPm04) {
+                        AudioProtocol.writePm04Header(
+                            packet, sequence++, streamRate, actualChannels.count, actualFormat.code
+                        )
+                        System.arraycopy(silence, 0, packet, AudioProtocol.PM04_HEADER_SIZE, silence.size)
+                        out.write(packet, 0, packet.size)
+                        packet.size
+                    } else {
+                        out.write(silence, 0, silence.size)
+                        silence.size
                     }
                     totalPacketsSent++
-                    totalBytesSent += silence.size
-                    reportAudioLevel(0f, -60f)
+                    totalBytesSent += writeLen
+                    reportAudioLevel(0f, -60f, null)
                     reportTelemetry(totalPacketsSent, totalBytesSent, 0f)
                     sleepPacketMs()
                     continue
@@ -741,47 +896,46 @@ class PhoneMicService : Service() {
                 }
 
                 if (read > 0) {
-                    val (level, db) = processAudioBuffer(data, read, gain)
-                    reportAudioLevel(level, db)
+                    val snap = frameProcessor.processFrame(
+                        data = data,
+                        length = read,
+                        format = actualFormat,
+                        channels = actualChannels.count,
+                        gain = gain,
+                        buildVisualizer = visualizerEnabled && (SystemClock.uptimeMillis() - lastLevelReportTime >= 75)
+                    )
+                    val level = frameProcessor.lastLevel
+                    val db = frameProcessor.lastDb
+                    reportAudioLevel(level, db, snap)
 
                     if (level == 0f) {
                         consecutiveSilence++
                         if (consecutiveSilence == 40) {
-                            Log.w(TAG, "Silence detected in TCP stream, recovering with MIC")
-                            try {
-                                recorder?.stop()
-                                recorder?.release()
-                                val recBufSize = currentQuality.packetSize * 4
-                                val newRec = AudioRecord(
-                                    MediaRecorder.AudioSource.MIC,
-                                    actualSampleRate,
-                                    AudioFormat.CHANNEL_IN_MONO,
-                                    AudioFormat.ENCODING_PCM_16BIT,
-                                    recBufSize
-                                )
-                                if (newRec.state == AudioRecord.STATE_INITIALIZED) {
-                                    recorder = newRec
-                                    newRec.startRecording()
-                                } else {
-                                    newRec.release()
-                                }
-                            } catch (_: Exception) {}
+                            Log.w(TAG, "Silence detected in TCP stream, recovering recorder")
+                            recoverSilentRecorder(preferredMicId, payloadSize)
                         }
                     } else {
                         consecutiveSilence = 0
                     }
 
                     if (socket.isClosed || stopRequested || !running) break
-                    try {
-                        out.write(data, 0, read)
-                    } catch (se: SocketException) {
-                        if (stopRequested || !running || socket.isClosed || myGeneration != generation) {
-                            break
+                    val sentLen = if (useExtendedPm04) {
+                        AudioProtocol.writePm04Header(
+                            packet, sequence++, streamRate, actualChannels.count, actualFormat.code
+                        )
+                        System.arraycopy(data, 0, packet, AudioProtocol.PM04_HEADER_SIZE, read)
+                        if (read < payloadSize) {
+                            Arrays.fill(packet, AudioProtocol.PM04_HEADER_SIZE + read, packet.size, 0.toByte())
                         }
-                        throw se
+                        out.write(packet, 0, packet.size)
+                        packet.size
+                    } else {
+                        out.write(data, 0, read)
+                        read
                     }
+
                     totalPacketsSent++
-                    totalBytesSent += read
+                    totalBytesSent += sentLen
                     packetsInWindow++
 
                     val now = SystemClock.uptimeMillis()
@@ -799,13 +953,12 @@ class PhoneMicService : Service() {
                     sleepPacketMs()
                 }
             }
+            return true
         } catch (e: Exception) {
-            handleStreamError(e, myGeneration)
+            return handleStreamError(e, myGeneration)
         } finally {
             tcpSocket = null
-            try {
-                socket?.close()
-            } catch (_: Exception) {}
+            try { socket?.close() } catch (_: Exception) {}
         }
     }
 
@@ -813,7 +966,13 @@ class PhoneMicService : Service() {
     // UDP
     // ========================================================
 
-    private fun udpLoop(ip: String, port: Int, myGeneration: Int) {
+    private fun udpLoop(
+        ip: String,
+        port: Int,
+        myGeneration: Int,
+        micSource: Int,
+        preferredMicId: Int
+    ): Boolean {
         var socket: DatagramSocket? = null
         try {
             socket = DatagramSocket()
@@ -821,7 +980,7 @@ class PhoneMicService : Service() {
             udpSocket = socket
 
             val address = InetAddress.getByName(ip)
-            
+
             val rec = recorder ?: throw IOException("AudioRecord not initialized")
             try {
                 if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
@@ -831,20 +990,17 @@ class PhoneMicService : Service() {
                 Log.w(TAG, "UDP startRecording retry: ${e.message}")
             }
 
-            setState(true, "Sending (UDP)")
-            Log.i(TAG, "Starting UDP stream to $address:$port")
+            val connStatus = if (pttMode && !pttPressed) "PTT Ready (Hold to Talk)" else "Sending (UDP)"
+            setState(true, connStatus)
+            Log.i(TAG, "Starting UDP stream to $address:$port (pm04=$useExtendedPm04, rate=${effectiveStreamRate()}, ch=${actualChannels.count}, fmt=${actualFormat.id})")
 
-            // Remote control listener thread for incoming commands from Windows Receiver
             val ctrlThread = Thread({
                 val cmdBuf = ByteArray(64)
                 val cmdPacket = DatagramPacket(cmdBuf, cmdBuf.size)
                 while (running && !stopRequested && !socket.isClosed && myGeneration == generation) {
                     try {
                         socket.receive(cmdPacket)
-                        // B6: Security - only accept remote control commands from the connected receiver IP
-                        if (cmdPacket.address != address) {
-                            continue
-                        }
+                        if (cmdPacket.address != address) continue
                         if (cmdPacket.length >= 4) {
                             val cmdStr = String(cmdBuf, 0, 4, Charsets.US_ASCII)
                             if (cmdStr == CMD_PAUSE) {
@@ -854,7 +1010,6 @@ class PhoneMicService : Service() {
                             }
                         }
                     } catch (_: SocketTimeoutException) {
-                        // Expected: continue looping without locking socket
                     } catch (_: SocketException) {
                         break
                     } catch (_: Exception) {
@@ -865,35 +1020,39 @@ class PhoneMicService : Service() {
             ctrlThread.isDaemon = true
             ctrlThread.start()
 
-            val packetSize = currentQuality.packetSize
+            val streamRate = effectiveStreamRate()
+            val payloadSize = effectivePayloadSize()
+            val headerSize = if (useExtendedPm04) AudioProtocol.PM04_HEADER_SIZE else AudioProtocol.LEGACY_HEADER_SIZE
             val raw44k = if (needsResampling44k) ByteArray(882) else ByteArray(0)
-            val audio = ByteArray(packetSize)
-            val packet = ByteArray(packetSize + 8)
-            val silence = ByteArray(packetSize)
+            val audio = ByteArray(payloadSize)
+            val packet = ByteArray(headerSize + payloadSize)
+            val silence = ByteArray(payloadSize)
+            AudioProtocol.fillSilence(silence, actualFormat)
+            val legacyTag = AudioProtocol.legacyMagicTagForRate(streamRate)
+
             var sequence = 0
             var packetsInWindow = 0
             var windowStart = SystemClock.uptimeMillis()
             var consecutiveSilence = 0
 
-            // Pre-create DatagramPacket for high performance and zero GC pauses on Android 7.1.1
             val udpPacket = DatagramPacket(packet, packet.size, address, port)
 
             while (running && !stopRequested && !socket.isClosed && myGeneration == generation) {
-                if (paused) {
-                    writeHeader(packet, sequence++)
-                    System.arraycopy(silence, 0, packet, 8, silence.size)
+                val activeMuted = isEffectivelyMuted()
+                if (activeMuted) {
+                    consecutiveSilence = 0
+                    writeUdpHeader(packet, sequence++, streamRate, legacyTag)
+                    System.arraycopy(silence, 0, packet, headerSize, silence.size)
                     if (socket.isClosed || stopRequested || !running) break
                     try {
                         socket.send(udpPacket)
                     } catch (se: SocketException) {
-                        if (stopRequested || !running || socket.isClosed || myGeneration != generation) {
-                            break
-                        }
+                        if (stopRequested || !running || socket.isClosed || myGeneration != generation) break
                         throw se
                     }
                     totalPacketsSent++
                     totalBytesSent += packet.size
-                    reportAudioLevel(0f, -60f)
+                    reportAudioLevel(0f, -60f, null)
                     reportTelemetry(totalPacketsSent, totalBytesSent, 0f)
                     sleepPacketMs()
                     continue
@@ -927,50 +1086,38 @@ class PhoneMicService : Service() {
                     continue
                 }
 
-                val (level, db) = processAudioBuffer(audio, read, gain)
-                reportAudioLevel(level, db)
+                val snap = frameProcessor.processFrame(
+                    data = audio,
+                    length = read,
+                    format = actualFormat,
+                    channels = actualChannels.count,
+                    gain = gain,
+                    buildVisualizer = visualizerEnabled && (SystemClock.uptimeMillis() - lastLevelReportTime >= 75)
+                )
+                val level = frameProcessor.lastLevel
+                val db = frameProcessor.lastDb
+                reportAudioLevel(level, db, snap)
 
                 if (level == 0f) {
                     consecutiveSilence++
                     if (consecutiveSilence == 40) {
-                        Log.w(TAG, "Silence detected in UDP stream, recovering with MIC")
-                        try {
-                            recorder?.stop()
-                            recorder?.release()
-                            val recBufSize = currentQuality.packetSize * 4
-                            val newRec = AudioRecord(
-                                MediaRecorder.AudioSource.MIC,
-                                actualSampleRate,
-                                AudioFormat.CHANNEL_IN_MONO,
-                                AudioFormat.ENCODING_PCM_16BIT,
-                                recBufSize
-                            )
-                            if (newRec.state == AudioRecord.STATE_INITIALIZED) {
-                                recorder = newRec
-                                newRec.startRecording()
-                            } else {
-                                newRec.release()
-                            }
-                        } catch (_: Exception) {}
+                        Log.w(TAG, "Silence detected in UDP stream, recovering recorder")
+                        recoverSilentRecorder(preferredMicId, payloadSize)
                     }
                 } else {
                     consecutiveSilence = 0
                 }
 
-                writeHeader(packet, sequence++)
-                System.arraycopy(audio, 0, packet, 8, read)
-                if (read < packetSize) {
-                    Arrays.fill(packet, 8 + read, packet.size, 0.toByte())
+                writeUdpHeader(packet, sequence++, streamRate, legacyTag)
+                System.arraycopy(audio, 0, packet, headerSize, read)
+                if (read < payloadSize) {
+                    Arrays.fill(packet, headerSize + read, packet.size, 0.toByte())
                 }
-                if (socket.isClosed || stopRequested || !running) {
-                    break
-                }
+                if (socket.isClosed || stopRequested || !running) break
                 try {
                     socket.send(udpPacket)
                 } catch (se: SocketException) {
-                    if (stopRequested || !running || socket.isClosed || myGeneration != generation) {
-                        break
-                    }
+                    if (stopRequested || !running || socket.isClosed || myGeneration != generation) break
                     throw se
                 }
                 totalPacketsSent++
@@ -986,39 +1133,50 @@ class PhoneMicService : Service() {
                     windowStart = now
                 }
             }
+            return true
         } catch (e: Exception) {
-            handleStreamError(e, myGeneration)
+            return handleStreamError(e, myGeneration)
         } finally {
             udpSocket = null
-            try {
-                socket?.close()
-            } catch (_: Exception) {}
+            try { socket?.close() } catch (_: Exception) {}
         }
     }
 
-    private fun handleStreamError(e: Exception, myGeneration: Int) {
+    private fun writeUdpHeader(packet: ByteArray, seq: Int, streamRate: Int, legacyTag: Byte) {
+        if (useExtendedPm04) {
+            AudioProtocol.writePm04Header(packet, seq, streamRate, actualChannels.count, actualFormat.code)
+        } else {
+            AudioProtocol.writeLegacyHeader(packet, seq, legacyTag)
+        }
+    }
+
+    /** Returns true if exit was intentional/clean (do NOT auto-reconnect), false if retryable failure. */
+    private fun handleStreamError(e: Exception, myGeneration: Int): Boolean {
         val msg = e.message?.lowercase(Locale.ROOT) ?: ""
         val isSocketClosed = e is SocketException && (
             msg.contains("closed") ||
-            msg.contains("interrupted") ||
-            msg.contains("pipe") ||
-            msg.contains("reset")
-        )
+                msg.contains("interrupted") ||
+                msg.contains("pipe") ||
+                msg.contains("reset")
+            )
         val isInterrupted = e is InterruptedException || Thread.currentThread().isInterrupted
 
-        // Clean termination during stop or shutdown should not be logged as a stream error
         if (stopRequested || !running || myGeneration != generation || isInterrupted) {
             Log.d(TAG, "Stream ended gracefully: ${e.javaClass.simpleName} ($msg)")
-            return
+            return true
         }
 
-        // If socket was closed/reset by peer or network drop while stream was active
+        if (autoReconnect) {
+            Log.w(TAG, "Transient stream failure (auto-reconnect active): ${e.message}")
+            return false
+        }
+
         if (isSocketClosed) {
             Log.i(TAG, "Stream socket closed: $msg")
             stateMessage = "Disconnected"
             sendState()
             updateNotification(stateMessage)
-            return
+            return true
         }
 
         Log.e(TAG, "Stream error", e)
@@ -1026,6 +1184,7 @@ class PhoneMicService : Service() {
         stateMessage = "Connection failed" + if (detail != null) ": $detail" else ""
         sendState()
         updateNotification(stateMessage)
+        return true
     }
 
     private fun sleepPacketMs() {
@@ -1034,19 +1193,8 @@ class PhoneMicService : Service() {
         } catch (_: InterruptedException) {}
     }
 
-    // Packet layout: 'P','M','0',tag + 4-byte big-endian sequence number
-    private fun writeHeader(packet: ByteArray, seq: Int, tag: Byte = currentQuality.magicTag) {
-        packet[0] = 'P'.code.toByte()
-        packet[1] = 'M'.code.toByte()
-        packet[2] = '0'.code.toByte()
-        packet[3] = tag
-        ByteBuffer.wrap(packet, 4, 4)
-            .order(ByteOrder.BIG_ENDIAN)
-            .putInt(seq)
-    }
-
     // ========================================================
-    // POWER LOCKS
+    // POWER LOCKS & NOTIFICATION
     // ========================================================
 
     private fun acquireLocks(wifi: Boolean) {
@@ -1054,7 +1202,7 @@ class PhoneMicService : Service() {
         if (pm != null) {
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PhoneMic:stream")
             wakeLock?.setReferenceCounted(false)
-            wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24h safety limit
+            wakeLock?.acquire(24 * 60 * 60 * 1000L)
         }
         if (wifi) {
             val wm = applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager
@@ -1073,24 +1221,11 @@ class PhoneMicService : Service() {
     }
 
     private fun releaseLocks() {
-        try {
-            if (wakeLock?.isHeld == true) {
-                wakeLock?.release()
-            }
-        } catch (_: Exception) {}
+        try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
         wakeLock = null
-
-        try {
-            if (wifiLock?.isHeld == true) {
-                wifiLock?.release()
-            }
-        } catch (_: Exception) {}
+        try { if (wifiLock?.isHeld == true) wifiLock?.release() } catch (_: Exception) {}
         wifiLock = null
     }
-
-    // ========================================================
-    // NOTIFICATION
-    // ========================================================
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1101,8 +1236,7 @@ class PhoneMicService : Service() {
             ).apply {
                 description = "Active microphone streaming session"
             }
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }
     }
 
@@ -1117,23 +1251,17 @@ class PhoneMicService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val stopIntent = Intent(this, PhoneMicService::class.java).apply {
-            action = ACTION_STOP
-        }
         val stopPendingIntent = PendingIntent.getService(
             this,
             1,
-            stopIntent,
+            Intent(this, PhoneMicService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val pauseResumeIntent = Intent(this, PhoneMicService::class.java).apply {
-            action = ACTION_TOGGLE_PAUSE
-        }
         val pauseResumePendingIntent = PendingIntent.getService(
             this,
             2,
-            pauseResumeIntent,
+            Intent(this, PhoneMicService::class.java).apply { action = ACTION_TOGGLE_PAUSE },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val pauseActionTitle = if (paused) getString(R.string.btn_resume) else getString(R.string.btn_pause)
@@ -1152,23 +1280,14 @@ class PhoneMicService : Service() {
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(openPendingIntent)
             .setOngoing(true)
-            .addAction(
-                pauseActionIcon,
-                pauseActionTitle,
-                pauseResumePendingIntent
-            )
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                getString(R.string.btn_stop),
-                stopPendingIntent
-            )
+            .addAction(pauseActionIcon, pauseActionTitle, pauseResumePendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.btn_stop), stopPendingIntent)
             .build()
     }
 
     private fun updateNotification(text: String) {
         try {
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.notify(NOTIFICATION_ID, createNotification(text))
+            getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, createNotification(text))
         } catch (_: Exception) {}
     }
 

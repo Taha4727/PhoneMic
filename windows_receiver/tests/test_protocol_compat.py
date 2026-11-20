@@ -413,6 +413,97 @@ def test_multi_client_tcp_lifecycle():
         assert not leftover, f"Leftover receiver threads after stop(): {leftover}"
 
 
+def test_pm04_wire_and_engine_formats():
+    from phonemic.const import FMT_PCM_16, FMT_PCM_24, FMT_PCM_8, FMT_PCM_FLOAT32
+    from phonemic.wire import TcpStreamParser, parse_pm04_header, pm04_frame_bytes
+
+    def make_pm04(seq, sr, ch, fmt, payload):
+        return b"PM04" + struct.pack(">IIBBH", seq, sr, ch, fmt, 0) + payload
+
+    # 1. Exact frame sizing and header parse checks
+    assert pm04_frame_bytes(44100, 2, FMT_PCM_16) == 441 * 2 * 2
+    assert pm04_frame_bytes(48000, 2, FMT_PCM_FLOAT32) == 480 * 2 * 4
+    assert pm04_frame_bytes(32000, 1, FMT_PCM_8) == 320
+    assert pm04_frame_bytes(48000, 2, FMT_PCM_24) == 480 * 2 * 3
+    assert pm04_frame_bytes(48000, 3, FMT_PCM_16) == 0
+
+    p_hdr = make_pm04(7, 44100, 2, FMT_PCM_24, b"\x00" * (441 * 2 * 3))
+    assert parse_pm04_header(p_hdr, 0) == (7, 44100, 2, FMT_PCM_24, 441 * 2 * 3)
+
+    # 2. Framed PM04 TCP stream across split boundaries (44.1k stereo float32)
+    payload_44k = b"\x00\x00\x00\x3f" * (441 * 2)  # ~0.5 float32 stereo (3528 B)
+    stream = b"".join(make_pm04(s, 44100, 2, FMT_PCM_FLOAT32, payload_44k) for s in (0, 1, 2))
+    parser = TcpStreamParser(default_rate=48000)
+    parsed_frames = []
+    for off in range(0, len(stream), 313):
+        parsed_frames.extend(parser.feed_ex(stream[off:off + 313]))
+    assert parser.mode == "framed"
+    assert [(s, len(p), sr, ch, fmt) for s, p, sr, ch, fmt in parsed_frames] == [
+        (0, len(payload_44k), 44100, 2, FMT_PCM_FLOAT32),
+        (1, len(payload_44k), 44100, 2, FMT_PCM_FLOAT32),
+        (2, len(payload_44k), 44100, 2, FMT_PCM_FLOAT32),
+    ]
+
+    # 3. False-positive guard: bogus channel count falls back cleanly to raw
+    bad_pm04 = b"PM04" + struct.pack(">IIBBH", 0, 48000, 9, FMT_PCM_16, 0) + b"\x01\x02" * 472
+    raw_parser = TcpStreamParser(default_rate=48000)
+    raw_out = raw_parser.feed_ex(bad_pm04)
+    assert raw_parser.mode == "raw" and len(raw_out) == 1
+
+    if not HAS_NUMPY:
+        print("  SKIP NumPy PM04 Receiver decode tests (numpy not installed)")
+        return
+
+    from phonemic.config import ConfigManager
+    from phonemic.engine import Receiver
+
+    class StubNetInfo:
+        def best_ip(self): return "127.0.0.1"
+        def matching_ip(self, remote_ip): return "127.0.0.1"
+        def broadcast_targets(self): return []
+
+    d = tempfile.mkdtemp()
+    cfg = ConfigManager(os.path.join(d, "pm04.json"))
+    port = 25151
+    cfg.data["network"]["port"] = port
+    cfg.data["network"]["beacon"] = False
+    rx = Receiver(cfg, sd_module=fake_sd, netinfo=StubNetInfo())
+
+    # Direct decode accuracy across all 4 formats & stereo downmix
+    # 8-bit unsigned 0xC0 (+0.5) & 0x80 (0.0) interleaved stereo -> avg 0.25
+    u8_stereo = bytes([0xC0, 0x80] * 480)
+    dec8 = rx._decode_pcm_48k(u8_stereo, 48000, channels=2, fmt_code=FMT_PCM_8)
+    assert dec8.shape == (480,) and abs(float(np.mean(dec8)) - 0.25) < 0.01, np.mean(dec8)
+
+    # 24-bit packed signed LE stereo (+0.5 L, +0.5 R) -> 0x400000 = 4194304 = \x00\x00\x40
+    i24_stereo = b"\x00\x00\x40" * (480 * 2)
+    dec24 = rx._decode_pcm_48k(i24_stereo, 48000, channels=2, fmt_code=FMT_PCM_24)
+    assert dec24.shape == (480,) and abs(float(np.mean(dec24)) - 0.5) < 1e-4, np.mean(dec24)
+
+    # 44.1 kHz float32 stereo -> 480 mono samples
+    f32_44k = np.full((441, 2), 0.4, dtype="<f4").tobytes()
+    dec_f32 = rx._decode_pcm_48k(f32_44k, 44100, channels=2, fmt_code=FMT_PCM_FLOAT32)
+    assert dec_f32.shape == (480,) and abs(float(np.mean(dec_f32)) - 0.4) < 1e-4, np.mean(dec_f32)
+
+    # Full UDP + TCP ingest on port 25151
+    rx.start()
+    time.sleep(0.2)
+    usock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # 48k Stereo Float32 UDP datagram (3856 bytes total!)
+        f32_pkt = make_pm04(0, 48000, 2, FMT_PCM_FLOAT32, np.full(480 * 2, 0.25, dtype="<f4").tobytes())
+        usock.sendto(f32_pkt, ("127.0.0.1", port))
+        deadline = time.monotonic() + 1.5
+        while rx.stats.packets < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert rx.stats.packets >= 1
+        assert rx.client_channels == 2 and rx.client_fmt_code == FMT_PCM_FLOAT32 and rx.client_sample_rate == 48000
+    finally:
+        usock.close()
+        rx.stop()
+        cfg.close()
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
