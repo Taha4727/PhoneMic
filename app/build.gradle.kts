@@ -59,6 +59,7 @@ android {
     unitTests {
       isIncludeAndroidResources = true
       all {
+        it.maxHeapSize = "2g"
         it.systemProperty("robolectric.usePreinstrumentedJars", "true")
         val localRobolectricDir = file("/home/appuser/.m2/repository/org/robolectric/android-all-instrumented/16-robolectric-13921718-i7")
         if (localRobolectricDir.exists()) {
