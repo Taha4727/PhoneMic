@@ -1,10 +1,17 @@
 package com.example
 
+import androidx.compose.ui.graphics.Color
 import com.example.audio.AudioFormatOption
 import com.example.audio.AudioFrameProcessor
 import com.example.audio.AudioProtocol
+import com.example.ui.screens.formatElapsedHms
+import com.example.ui.theme.AppPaletteStyle
+import com.example.ui.theme.ThemeColorPreset
+import com.example.ui.theme.formatColorHex
+import com.example.ui.theme.resolvePhoneMicColors
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,6 +28,59 @@ class ExampleUnitTest {
   fun appVersion_is140() {
     assertEquals("1.4.0", BuildConfig.VERSION_NAME)
     assertEquals(5, BuildConfig.VERSION_CODE)
+  }
+
+  @Test
+  fun formatElapsedHms_formatsCleanly() {
+    assertEquals("00:00:00", formatElapsedHms(0L))
+    assertEquals("00:14:22", formatElapsedHms(862L))
+    assertEquals("01:01:01", formatElapsedHms(3661L))
+  }
+
+  @Test
+  fun resolvePhoneMicColors_supportsDarkOledLightAndPalettes() {
+    val defaultDark = resolvePhoneMicColors(isDark = true, oledBlack = false, palette = AppPaletteStyle.TONAL_SPOT)
+    assertTrue(defaultDark.isDark)
+    assertFalse(defaultDark.isOled)
+    assertEquals(Color(0xFF121212), defaultDark.background)
+
+    val oledDark = resolvePhoneMicColors(isDark = true, oledBlack = true, palette = AppPaletteStyle.TONAL_SPOT)
+    assertTrue(oledDark.isDark)
+    assertTrue(oledDark.isOled)
+    assertEquals(Color(0xFF000000), oledDark.background)
+    assertEquals(Color(0xFF000000), oledDark.bottomBarSurface)
+
+    val light = resolvePhoneMicColors(isDark = false, oledBlack = true, palette = AppPaletteStyle.MONOCHROME)
+    assertFalse(light.isDark)
+    assertFalse(light.isOled)
+    assertNotEquals(Color(0xFF000000), light.background)
+
+    val accents = AppPaletteStyle.entries.map {
+      resolvePhoneMicColors(isDark = true, oledBlack = false, palette = it).accent
+    }.toSet()
+    assertEquals(AppPaletteStyle.entries.size, accents.size)
+  }
+
+  @Test
+  fun resolvePhoneMicColors_supportsThemeColorPresetsAndCustomColor() {
+    assertEquals("#8B5CF6", formatColorHex(0xFF8B5CF6L))
+
+    val emerald = resolvePhoneMicColors(
+      isDark = true,
+      oledBlack = false,
+      palette = AppPaletteStyle.TONAL_SPOT,
+      themeColorPreset = ThemeColorPreset.EMERALD
+    )
+    assertEquals(Color(0xFF10B981), emerald.accent)
+
+    val customBright = resolvePhoneMicColors(
+      isDark = true,
+      oledBlack = true,
+      palette = AppPaletteStyle.NEUTRAL,
+      themeColorPreset = ThemeColorPreset.CUSTOM,
+      customColorArgb = 0xFFFF6600L
+    )
+    assertEquals(Color(0xFFFF6600), customBright.accent)
   }
 
   @Test

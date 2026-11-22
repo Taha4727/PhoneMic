@@ -50,7 +50,7 @@ class PhoneMicService : Service() {
     interface Listener {
         fun onStateChanged(running: Boolean, paused: Boolean, connected: Boolean, message: String)
         fun onAudioLevel(normalizedLevel: Float, peakDb: Float)
-        fun onTelemetry(packetsSent: Long, bytesSent: Long, packetRate: Float)
+        fun onTelemetry(packetsSent: Long, bytesSent: Long, packetRate: Float, packetsDropped: Long = 0L)
         fun onVisualizerData(snapshot: VisualizerSnapshot) {}
     }
 
@@ -169,6 +169,7 @@ class PhoneMicService : Service() {
 
     @Volatile private var totalPacketsSent = 0L
     @Volatile private var totalBytesSent = 0L
+    @Volatile private var totalPacketsDropped = 0L
 
     private var lastLevelReportTime = 0L
     private var lastTelemetryReportTime = 0L
@@ -233,9 +234,10 @@ class PhoneMicService : Service() {
         val m = stateMessage
         val pkts = totalPacketsSent
         val b = totalBytesSent
+        val dropped = totalPacketsDropped
         mainHandler.post {
             listener.onStateChanged(r, p, c, m)
-            listener.onTelemetry(pkts, b, if (r && !p) 100.0f else 0f)
+            listener.onTelemetry(pkts, b, if (r && !p) 100.0f else 0f, dropped)
         }
     }
 
@@ -282,7 +284,7 @@ class PhoneMicService : Service() {
         }
     }
 
-    private fun reportTelemetry(packets: Long, bytes: Long, rate: Float) {
+    private fun reportTelemetry(packets: Long, bytes: Long, rate: Float, dropped: Long = totalPacketsDropped) {
         val now = SystemClock.uptimeMillis()
         if (now - lastTelemetryReportTime < 500) {
             return
@@ -290,7 +292,7 @@ class PhoneMicService : Service() {
         lastTelemetryReportTime = now
         mainHandler.post {
             for (listener in listeners) {
-                listener.onTelemetry(packets, bytes, rate)
+                listener.onTelemetry(packets, bytes, rate, dropped)
             }
         }
     }
@@ -600,6 +602,7 @@ class PhoneMicService : Service() {
         streamingStartedAt = SystemClock.elapsedRealtime()
         totalPacketsSent = 0L
         totalBytesSent = 0L
+        totalPacketsDropped = 0L
         lastTelemetryReportTime = 0L
         sendState()
 
@@ -648,6 +651,7 @@ class PhoneMicService : Service() {
                         attempt = 0
                     }
                     attempt++
+                    totalPacketsDropped++
                     val waitSec = max(1, (backoffMs / 1000L).toInt())
                     setState(false, "Reconnecting in ${waitSec}s (#$attempt)…")
                     var slept = 0L
@@ -950,6 +954,7 @@ class PhoneMicService : Service() {
                     if (stopRequested || !running || myGeneration != generation) break
                     throw IOException("AudioRecord error $read")
                 } else {
+                    totalPacketsDropped++
                     sleepPacketMs()
                 }
             }
@@ -1082,6 +1087,7 @@ class PhoneMicService : Service() {
                     throw IOException("AudioRecord error $read")
                 }
                 if (read == 0) {
+                    totalPacketsDropped++
                     sleepPacketMs()
                     continue
                 }

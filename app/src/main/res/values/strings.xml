@@ -48,7 +48,7 @@
 
     <string name="btn_scan_qr">Scan PC QR</string>
     <string name="qr_scanner_title">Scan PC Receiver QR</string>
-    <string name="qr_scanner_hint">Point your camera at the QR code shown on the Windows Receiver screen</string>
+    <string name="qr_scanner_hint">Point your camera at the QR code shown on the PC Receiver screen</string>
     <string name="qr_scanned_success">Connected to %1$s:%2$s</string>
     <string name="qr_invalid">Invalid PhoneMic QR code</string>
 
@@ -117,4 +117,42 @@
 
     <string name="ptt_hold_to_talk">HOLD TO TALK</string>
     <string name="ptt_transmitting">TALKING (RELEASE TO MUTE)</string>
+
+    <string name="nav_status">Status</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_settings">Settings</string>
+
+    <string name="status_connected">Connected</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="toggle_theme_cd">Toggle Light and Dark mode</string>
+
+    <string name="conn_wifi">Wi-Fi</string>
+    <string name="conn_usb">USB</string>
+    <string name="conn_qr_code">QR Code</string>
+    <string name="btn_scan_auto">Scan</string>
+    <string name="btn_mute_short">Mute</string>
+    <string name="btn_resume_short">Resume</string>
+    <string name="btn_start_short">Start</string>
+    <string name="btn_stop_short">Stop</string>
+    <string name="transport_udp_short">UDP • Low Latency</string>
+    <string name="transport_tcp_short">TCP • Reliable</string>
+
+    <string name="status_section_live_stream">LIVE AUDIO STREAM</string>
+    <string name="status_section_audio">AUDIO</string>
+    <string name="status_section_device">DEVICE</string>
+    <string name="stat_packet_loss">PACKET LOSS</string>
+    <string name="stat_stream_rate">STREAM RATE</string>
+    <string name="stat_transferred">TRANSFERRED</string>
+    <string name="stat_bitrate">BITRATE</string>
+
+    <string name="setting_theme_mode_title">Theme Mode</string>
+    <string name="setting_oled_colors_title">OLED Colors</string>
+    <string name="setting_oled_colors_desc">Use pure #000000 black background in Dark mode</string>
+    <string name="setting_palette_style_title">Palette Style</string>
+    <string name="setting_theme_color_title">Theme Color</string>
+    <string name="setting_theme_color_desc">Choose a signature accent color or open the custom color picker</string>
+    <string name="setting_custom_color_action">Customize Color</string>
+    <string name="custom_color_dialog_title">Custom Theme Color</string>
+    <string name="custom_color_apply">Apply Color</string>
 </resources>

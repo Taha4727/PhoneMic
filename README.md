@@ -141,19 +141,16 @@ python phonemic_cli.py --mix-mode duck
 Releases are triggered **manually on-demand** from GitHub Actions:
 
 1. **Android APK**: Compiled with Gradle (`PhoneMic-debug.apk`).
-2. **Windows Receiver ZIP**: Built with PyInstaller (`PhoneMicReceiver-Windows.zip`) containing:
-   * `PhoneMicReceiver.exe` (Standalone GUI)
-   * `phonemic_cli.py` (Standalone CLI)
-   * `fix_firewall.bat`
-   * Documentation
+2. **Windows Receiver ZIP**: Built with PyInstaller (`PhoneMicReceiver-Windows.zip`) containing `PhoneMicReceiver.exe`, `phonemic_cli.py`, `fix_firewall.bat`, and documentation.
+3. **Linux Receiver Tarball**: Built on Ubuntu with PyInstaller (`PhoneMicReceiver-Linux.tar.gz`) containing standalone `PhoneMicReceiver`, `phonemic_cli.py`, `setup_linux.sh`, `start_receiver.sh`, and `linux/PKGBUILD`.
 
 ### How to Create a Release:
 1. In your GitHub repository, go to the **Actions** tab.
-2. Select **"Manual Release (APK & Windows Receiver)"** from the left sidebar.
+2. Select **"Manual Release (APK, Windows & Linux Receiver)"** from the left sidebar.
 3. Click **"Run workflow"**.
 4. (Optional) Enter your desired release tag (e.g. `v1.4.0`) and title.
 5. Click the green **"Run workflow"** button.
-6. GitHub will build both the Android APK and Windows bundle and publish them directly to your repository's **Releases** page!
+6. GitHub will build the Android APK, Windows ZIP, and Linux tarball and publish them directly to your repository's **Releases** page!
 
 ---
 
@@ -162,9 +159,9 @@ Releases are triggered **manually on-demand** from GitHub Actions:
 ```
 +-------------------------------------------------------------+
 |                     Android Phone                           |
-|  [AudioRecord] -> 16-bit PCM Buffer (10ms frames)           |
+|  [AudioRecord] -> PCM Buffer (10ms frames, 8/16/24/32f)     |
 |         |                                                   |
-|  [Network Header] PM01 (48k) / PM02 (24k) / PM03 (16k)      |
+|  [Network Header] PM01–PM03 (Legacy) / PM04 (Extended)      |
 +-------------------------------------------------------------+
                               |
                      UDP / TCP (Port 5001)
@@ -173,18 +170,17 @@ Releases are triggered **manually on-demand** from GitHub Actions:
 |                   PC Receiver Engine                        |
 |  * UDP Beacon Discovery Responder (PMD0 -> PMA1)            |
 |  * Multi-Client Demuxer & Per-Device Jitter Buffers         |
-|  * Dynamic Linear Upsamplers (16k->48k 3x, 24k->48k 2x)     |
+|  * Dynamic Resamplers (8–48 kHz -> 48 kHz)                  |
 |  * Real-Time Mixer (Tanh Soft Limiter / Auto-Ducking)       |
-|  * Low-Latency WASAPI Output Engine (PortAudio)             |
+|  * Low-Latency WASAPI (Windows) / PipeWire-Pulse (Linux)    |
 +-------------------------------------------------------------+
                               |
-                  VB-Audio Virtual Cable / Speakers
+      VB-Audio Virtual Cable (Win) / PhoneMic Virtual Mic (Linux)
 ```
 
 ### Packet Format
-- **Byte 0..3**: Magic header (`b"PM01"` for 48 kHz, `b"PM02"` for 24 kHz, `b"PM03"` for 16 kHz).
-- **Byte 4..7**: Big-endian unsigned 32-bit packet sequence number (`seq`).
-- **Byte 8..N**: 16-bit signed little-endian linear PCM mono audio samples.
+- **Legacy (`PM01`–`PM03`)**: 4-byte magic (`PM01` 48 kHz, `PM02` 24 kHz, `PM03` 16 kHz) + 4-byte big-endian `seq` + 16-bit LE mono PCM.
+- **Extended (`PM04`)**: 16-byte big-endian header (`PM04`, `seq`, `sample_rate`, `channels`, `format_code`, `flags`) + PCM payload (8/16/24-bit or 32-bit Float, Mono or Stereo).
 
 ---
 

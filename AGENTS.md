@@ -61,11 +61,12 @@ Leave these modules untouched so audio streaming, Xiaomi/Samsung mic recovery, a
 - **String IDs (`strings.xml`):** Always descriptive `snake_case` (never `text1`, `label2`). Wait to migrate remaining inline strings into `strings.xml` incrementally as you rebuild components.
 - **Drawables:** Prefix vector/bitmap icons with `ic_`, backgrounds/banners with `bg_` or `illu_`.
 - **Protected Contract `testTag`s (Keep These IDs Working Across Redesigns):**
-  - Top bar / Navigation: `open_settings_button`, `settings_screen`, `settings_back_button`
-  - Hero / Stream Controls: `start_streaming_button`, `stop_streaming_button`, `pause_resume_button`, `ptt_hold_button`
+  - Navigation / Bottom Bar: `bottom_nav_bar`, `nav_tab_status`, `nav_tab_home`, `open_settings_button`, `settings_screen`, `settings_back_button`
+  - Hero / Stream Controls: `home_screen`, `home_section_controls`, `home_connection_status`, `home_connection_timer`, `theme_toggle_button`, `conn_mode_wifi`, `conn_mode_usb`, `conn_mode_qr`, `ip_address_input`, `port_input`, `scan_pc_button`, `home_transport_udp`, `home_transport_tcp`, `home_ptt_toggle`, `start_streaming_button`, `stop_streaming_button`, `pause_resume_button`, `ptt_hold_button`
   - Home Visualizer: `audio_visualizer_card` (and `visualizer_canvas_${style.id}` when rendered)
+  - Status Sections: `status_screen`, `status_section_live_stream`, `status_section_audio`, `status_section_device`
   - Settings Sections: `settings_section_general`, `settings_section_audio`, `settings_section_appearance`, `settings_section_about`
-  - Key Settings Controls: `setting_auto_start`, `setting_ptt_mode`, `setting_auto_reconnect`, `setting_visualizer_toggle`, `sample_rate_${rate}`, `audio_format_${fmt.id}`, `channels_${count}`, `visualizer_style_${style.id}`
+  - Key Settings Controls: `setting_auto_start`, `setting_ptt_mode`, `setting_auto_reconnect`, `setting_oled_colors`, `setting_visualizer_toggle`, `dropdown_palette_style`, `palette_style_${palette.id}`, `dropdown_theme_color`, `theme_color_${preset.id}`, `open_color_picker_button`, `custom_color_hex_input`, `dropdown_sample_rate`, `sample_rate_${rate}`, `dropdown_audio_format`, `audio_format_${fmt.id}`, `dropdown_channels`, `channels_${count}`, `dropdown_visualizer_style`, `visualizer_style_${style.id}`
 
 ---
 

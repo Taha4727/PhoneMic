@@ -24,10 +24,10 @@ First, tell me a brief visual direction plan (color palette, typography pairing,
 |---|---|---|
 | **Locked Backend** | Do NOT edit | `PhoneMicService.kt`, `audio/AudioProtocol.kt`, `FloatingMicOverlayService.kt`, `PhoneMicTileService.kt`, `ReceiverDiscovery.kt`, `DeviceProfile.kt`, `util/ShareHelper.kt`, `windows_receiver/`, `assets/phonemic_cli.py` |
 | **Shared Bridge** | Read & UI-extend only | `PhoneMicViewModel.kt`, `MainActivity.kt` |
-| **Active UI Screens** | Full rebuild allowed | `ui/screens/PhoneMicScreen.kt` (Home Studio + Stats + Settings toggle), `ui/screens/SettingsScreen.kt` (Single-page Settings: General, Audio, Appearance, About) |
-| **Active Theme** | Full rebuild allowed | `ui/theme/Color.kt`, `ui/theme/Type.kt`, `ui/theme/Theme.kt` |
-| **Active Components** | Full rebuild allowed | `HeroMicControl.kt`, `AudioVisualizer.kt`, `NetworkConfigSection.kt`, `GainBoostControl.kt`, `AudioQualitySelector.kt`, `StreamTelemetryCard.kt`, `ScreenAwakeControl.kt`, `FloatingOverlayControl.kt`, `BatteryOptimizationBanner.kt`, `MicrophonePermissionBanner.kt`, `QrScannerDialog.kt`, `ReceiverGuideDialog.kt` |
-| **Legacy / Unused UI** | Safe to delete or replace | `ui/components/AudioMeter.kt`, `ui/components/CompactTuningSection.kt`, `ui/components/StreamSettingsSection.kt` |
+| **Active UI Screens** | 3-Tab Flat Studio UI | `ui/screens/PhoneMicScreen.kt` (Bottom Bar shell), `ui/screens/HomeScreen.kt` (Zero-scroll main controls + visualizer), `ui/screens/StatusScreen.kt` (Live Audio Stream, Audio, Device), `ui/screens/SettingsScreen.kt` (General, Audio, Appearance, About) |
+| **Active Theme** | Palette & OLED system | `ui/theme/Color.kt` (`AppPaletteStyle`, `PhoneMicColors`, Dark `#121212`, OLED `#000000`, Light), `ui/theme/Type.kt` (`PlusJakartaFontFamily`, `JetBrainsMonoFontFamily`), `ui/theme/Theme.kt` |
+| **Active Components** | Slimmed & Theme-aware | `AudioVisualizer.kt`, `BatteryOptimizationBanner.kt`, `QrScannerDialog.kt`, `ReceiverGuideDialog.kt` |
+| **Archived v1 UI Backup** | Excluded from Gradle | `/ui_backup_v1/` (`theme/`, `screens/`, `components/`, `RESTORE_NOTES.md`) |
 
 ---
 

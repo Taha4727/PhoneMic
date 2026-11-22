@@ -9,6 +9,15 @@ The wire protocol is unchanged, so the Android app needs no update, and settings
 
 ---
 
+## What's new in 1.4.0
+
+### Extended Audio Protocol (`PM04`) & Companion Sync
+* **Flexible Format & Sample Rate Decoding**: Added full `PM04` extended wire header support across both the GUI engine and standalone `phonemic_cli.py` (arbitrary 8–48 kHz sample rates, 8/16/24-bit & 32-bit Float PCM, Mono/Stereo).
+* **Linux Virtual Mic & Cross-Distro Packaging**: Native PipeWire / PulseAudio virtual microphone creation (`PhoneMic_Sink` + `PhoneMic Virtual Mic`), `setup_linux.sh`, XDG desktop integration, and Arch `PKGBUILD` alongside Windows WASAPI / VB-CABLE support.
+* **Synced Android Companion (`v1.4.0`)**: Bundles matching `phonemic_cli.py v1.4.0` and adds a redesigned Material 3 Android UI with custom theming, OLED Black mode, and Push-to-Talk.
+
+---
+
 ## What's new in 1.3.0
 
 ### Obsidian Studio Interface & Live Theming

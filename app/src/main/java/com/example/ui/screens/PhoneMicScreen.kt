@@ -7,39 +7,31 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.outlined.Analytics
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -47,48 +39,26 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.DeviceProfile
+import com.example.MainTab
 import com.example.PhoneMicViewModel
 import com.example.R
-import com.example.ui.components.AudioQualitySelector
-import com.example.ui.components.AudioVisualizer
-import com.example.ui.components.BatteryOptimizationBanner
-import com.example.ui.components.FloatingOverlayControl
-import com.example.ui.components.GainBoostControl
-import com.example.ui.components.HeroMicControl
-import com.example.ui.components.MicrophonePermissionBanner
-import com.example.ui.components.NetworkConfigSection
 import com.example.ui.components.QrScannerDialog
 import com.example.ui.components.ReceiverGuideDialog
-import com.example.ui.components.ScreenAwakeControl
-import com.example.ui.components.StreamTelemetryCard
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.StreamActiveGreen
-import com.example.ui.theme.StreamErrorRed
-import com.example.ui.theme.StreamWarningAmber
-import com.example.ui.theme.StudioBorder
-import com.example.ui.theme.StudioDarkBg
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.PhoneMicTheme
 import com.example.util.ShareHelper
-import java.util.Locale
 
 @Composable
 fun PhoneMicScreen(
@@ -96,10 +66,9 @@ fun PhoneMicScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val audioDb by viewModel.audioDb.collectAsState()
     val visualizerSnapshot by viewModel.visualizerSnapshot.collectAsState()
     val context = LocalContext.current
-    var selectedTab by remember { mutableIntStateOf(0) }
+    val colors = PhoneMicTheme.colors
 
     var showMicPermissionRationaleDialog by remember { mutableStateOf(false) }
 
@@ -109,8 +78,8 @@ fun PhoneMicScreen(
         }
     }
 
-    BackHandler(enabled = uiState.showSettings) {
-        viewModel.setSettingsVisible(false)
+    BackHandler(enabled = uiState.activeTab != MainTab.HOME) {
+        viewModel.setActiveTab(MainTab.HOME)
     }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -177,433 +146,164 @@ fun PhoneMicScreen(
         uiState.availableMics.firstOrNull { it.id == uiState.preferredMicId }?.name ?: "System Default"
     }
 
-    if (uiState.showSettings) {
-        SettingsScreen(
-            uiState = uiState,
-            onBack = { viewModel.setSettingsVisible(false) },
-            onAutoStartChange = { viewModel.setAutoStartStreaming(it) },
-            onPushToTalkChange = { viewModel.setPushToTalkEnabled(it) },
-            onAutoReconnectChange = { viewModel.setAutoReconnectEnabled(it) },
-            onKeepScreenAwakeChange = { viewModel.setKeepScreenAwake(it) },
-            onOverlayToggle = { viewModel.toggleFloatingOverlay(context, it) },
-            onRefreshMics = { viewModel.refreshAvailableMics() },
-            onSelectMicDevice = { viewModel.setPreferredMicDevice(it) },
-            onSelectAudioSource = { viewModel.setMicMode(it) },
-            onSelectSampleRate = { viewModel.setSampleRate(it) },
-            onSelectAudioFormat = { viewModel.setAudioFormat(it) },
-            onSelectChannels = { viewModel.setChannels(it) },
-            onGainChange = { viewModel.setGain(it) },
-            onVisualizerEnabledChange = { viewModel.setVisualizerEnabled(it) },
-            onVisualizerStyleChange = { viewModel.setVisualizerStyle(it) },
-            onOpenGuide = { viewModel.setGuideDialogVisible(true) },
-            onShareCli = { ShareHelper.shareCliReceiver(context) },
-            modifier = modifier
-        )
-    } else {
-        val isPttMuted = uiState.isRunning && uiState.pushToTalkEnabled && !uiState.isPttPressed
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        containerColor = colors.background,
+        bottomBar = {
+            NavigationBar(
+                containerColor = colors.bottomBarSurface,
+                contentColor = colors.textPrimary,
+                tonalElevation = 0.dp,
+                windowInsets = WindowInsets.navigationBars,
+                modifier = Modifier.testTag("bottom_nav_bar")
+            ) {
+                    val itemColors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = colors.accent,
+                        selectedTextColor = colors.accent,
+                        indicatorColor = colors.accentSoftBg,
+                        unselectedIconColor = colors.textSecondary,
+                        unselectedTextColor = colors.textSecondary
+                    )
 
-        Scaffold(
-            modifier = modifier
-                .fillMaxSize()
-                .background(StudioDarkBg),
-            containerColor = StudioDarkBg,
-            topBar = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(StudioDarkBg)
-                        .statusBarsPadding()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Left: Live status and target IP
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(
-                                        when {
-                                            !uiState.isRunning -> NeonCyan
-                                            uiState.isPaused || isPttMuted -> StreamWarningAmber
-                                            uiState.isConnected -> StreamActiveGreen
-                                            else -> StreamWarningAmber
-                                        },
-                                        CircleShape
-                                    )
+                    NavigationBarItem(
+                        selected = uiState.activeTab == MainTab.STATUS,
+                        onClick = { viewModel.setActiveTab(MainTab.STATUS) },
+                        icon = {
+                            Icon(
+                                imageVector = if (uiState.activeTab == MainTab.STATUS) Icons.Filled.Analytics else Icons.Outlined.Analytics,
+                                contentDescription = stringResource(R.string.nav_status)
                             )
+                        },
+                        label = {
                             Text(
-                                text = if (uiState.isRunning) {
-                                    val s = uiState.elapsedSeconds
-                                    val m = s / 60
-                                    val sec = s % 60
-                                    String.format(Locale.US, "LIVE %02d:%02d", m, sec)
-                                } else {
-                                    "READY"
-                                },
-                                color = TextPrimary,
+                                text = stringResource(R.string.nav_status),
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace,
-                                maxLines = 1
+                                fontWeight = if (uiState.activeTab == MainTab.STATUS) FontWeight.Bold else FontWeight.Medium
                             )
+                        },
+                        colors = itemColors,
+                        modifier = Modifier.testTag("nav_tab_status")
+                    )
+
+                    NavigationBarItem(
+                        selected = uiState.activeTab == MainTab.HOME,
+                        onClick = { viewModel.setActiveTab(MainTab.HOME) },
+                        icon = {
+                            Icon(
+                                imageVector = if (uiState.activeTab == MainTab.HOME) Icons.Filled.Mic else Icons.Outlined.Mic,
+                                contentDescription = stringResource(R.string.nav_home)
+                            )
+                        },
+                        label = {
                             Text(
-                                text = "•",
-                                color = TextMuted,
-                                fontSize = 10.sp
+                                text = stringResource(R.string.nav_home),
+                                fontSize = 11.sp,
+                                fontWeight = if (uiState.activeTab == MainTab.HOME) FontWeight.Bold else FontWeight.Medium
                             )
+                        },
+                        colors = itemColors,
+                        modifier = Modifier.testTag("nav_tab_home")
+                    )
+
+                    NavigationBarItem(
+                        selected = uiState.activeTab == MainTab.SETTINGS,
+                        onClick = { viewModel.setActiveTab(MainTab.SETTINGS) },
+                        icon = {
+                            Icon(
+                                imageVector = if (uiState.activeTab == MainTab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
+                                contentDescription = stringResource(R.string.nav_settings)
+                            )
+                        },
+                        label = {
                             Text(
-                                text = "${uiState.ip}:${uiState.port}",
-                                color = TextMuted,
-                                fontSize = 10.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                text = stringResource(R.string.nav_settings),
+                                fontSize = 11.sp,
+                                fontWeight = if (uiState.activeTab == MainTab.SETTINGS) FontWeight.Bold else FontWeight.Medium
                             )
-                        }
-
-                        // Right: Studio/Stats Switch + Share + Help + Settings Icon
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .background(Color(0xFF0F1622), RoundedCornerShape(8.dp))
-                                    .border(1.dp, StudioBorder, RoundedCornerShape(8.dp))
-                                    .padding(2.dp)
-                            ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Box(
-                                        modifier = Modifier
-                                            .height(28.dp)
-                                            .background(
-                                                if (selectedTab == 0) Color(0xFF14293D) else Color.Transparent,
-                                                RoundedCornerShape(6.dp)
-                                            )
-                                            .clickable { selectedTab = 0 }
-                                            .padding(horizontal = 9.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = "Studio",
-                                            color = if (selectedTab == 0) NeonCyan else TextSecondary,
-                                            fontSize = 11.sp,
-                                            fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                    }
-
-                                    Box(
-                                        modifier = Modifier
-                                            .height(28.dp)
-                                            .background(
-                                                if (selectedTab == 1) Color(0xFF14293D) else Color.Transparent,
-                                                RoundedCornerShape(6.dp)
-                                            )
-                                            .clickable { selectedTab = 1 }
-                                            .padding(horizontal = 9.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = "Stats",
-                                            color = if (selectedTab == 1) NeonCyan else TextSecondary,
-                                            fontSize = 11.sp,
-                                            fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                    }
-                                }
-                            }
-
-                            IconButton(
-                                onClick = { ShareHelper.shareCliReceiver(context) },
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .testTag("share_receiver_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Share,
-                                    contentDescription = "Share CLI Receiver",
-                                    tint = NeonCyan,
-                                    modifier = Modifier.size(17.dp)
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { viewModel.setGuideDialogVisible(true) },
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .testTag("help_guide_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.HelpOutline,
-                                    contentDescription = "Setup Guide",
-                                    tint = TextSecondary,
-                                    modifier = Modifier.size(17.dp)
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { viewModel.setSettingsVisible(true) },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .testTag("open_settings_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Settings,
-                                    contentDescription = stringResource(R.string.open_settings_cd),
-                                    tint = TextPrimary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(1.dp)
-                            .background(StudioBorder)
+                        },
+                        colors = itemColors,
+                        modifier = Modifier.testTag("open_settings_button")
                     )
                 }
-            },
-            bottomBar = {
-                AnimatedVisibility(
-                    visible = uiState.isRunning,
-                    enter = fadeIn(),
-                    exit = fadeOut()
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color(0xFF0A1017))
-                            .border(1.dp, StudioBorder)
-                            .navigationBarsPadding()
-                            .padding(horizontal = 14.dp, vertical = 6.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .background(
-                                            if (uiState.isPaused || isPttMuted) StreamWarningAmber else StreamActiveGreen,
-                                            CircleShape
-                                        )
-                                )
-                                val bottomStatus = when {
-                                    isPttMuted -> "PTT MUTED"
-                                    uiState.isPaused -> "MUTED"
-                                    else -> "STREAMING"
-                                }
-                                Text(
-                                    text = bottomStatus,
-                                    color = if (uiState.isPaused || isPttMuted) StreamWarningAmber else StreamActiveGreen,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                if (!uiState.pushToTalkEnabled) {
-                                    OutlinedButton(
-                                        onClick = { viewModel.togglePause() },
-                                        modifier = Modifier.height(36.dp),
-                                        shape = RoundedCornerShape(6.dp),
-                                        colors = ButtonDefaults.outlinedButtonColors(
-                                            contentColor = if (uiState.isPaused) StreamWarningAmber else TextPrimary
-                                        )
-                                    ) {
-                                        Text(
-                                            if (uiState.isPaused) "Resume" else "Mute",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1
-                                        )
-                                    }
-                                }
-
-                                Button(
-                                    onClick = { viewModel.stopStreaming(context) },
-                                    modifier = Modifier.height(36.dp),
-                                    shape = RoundedCornerShape(6.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = StreamErrorRed,
-                                        contentColor = Color.White
-                                    )
-                                ) {
-                                    Text("Stop", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        ) { innerPadding ->
-            Column(
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(bottom = innerPadding.calculateBottomPadding()),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .widthIn(max = 640.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 640.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (uiState.activeTab) {
+                    MainTab.STATUS -> StatusScreen(
+                        uiState = uiState,
+                        selectedMicName = selectedMicName,
+                        onBatteryDismissOrGranted = { viewModel.checkBatteryOptimization() }
+                    )
 
-                        MicrophonePermissionBanner(
-                            hasPermission = uiState.hasMicPermission,
-                            onRequestPermission = {
-                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    MainTab.HOME -> HomeScreen(
+                        uiState = uiState,
+                        visualizerSnapshot = visualizerSnapshot,
+                        isValidIp = viewModel.isValidIp(uiState.ip),
+                        isValidPort = viewModel.isValidPort(uiState.port),
+                        onToggleTheme = { viewModel.toggleDarkMode() },
+                        onRequestMicPermission = {
+                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        },
+                        onConnectionModeSelected = { mode -> viewModel.setConnectionMode(mode) },
+                        onQrCodeClick = {
+                            val hasCam = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.CAMERA
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (hasCam) {
+                                viewModel.setQrScannerVisible(true)
+                            } else {
+                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                             }
-                        )
+                        },
+                        onIpChange = { viewModel.setIp(it) },
+                        onPortChange = { viewModel.setPort(it) },
+                        onScanClick = { viewModel.scanForPc(context) },
+                        onTransportModeSelected = { viewModel.setTransportMode(it) },
+                        onPttToggleChange = { viewModel.setPushToTalkEnabled(it) },
+                        onPttPressChange = { viewModel.setPttPressed(it) },
+                        onStartClick = { handleStartStream() },
+                        onStopClick = { viewModel.stopStreaming(context) },
+                        onPauseClick = { viewModel.togglePause() }
+                    )
 
-                        BatteryOptimizationBanner(
-                            isIgnored = uiState.isIgnoringBatteryOptimizations,
-                            onDismissOrGranted = { viewModel.checkBatteryOptimization() }
-                        )
-
-                        when (selectedTab) {
-                            0 -> {
-                                HeroMicControl(
-                                    isRunning = uiState.isRunning,
-                                    isPaused = uiState.isPaused,
-                                    isConnected = uiState.isConnected,
-                                    statusMessage = uiState.statusMessage,
-                                    elapsedSeconds = uiState.elapsedSeconds,
-                                    ip = uiState.ip,
-                                    port = uiState.port,
-                                    transportMode = uiState.transportMode,
-                                    connectionMode = uiState.connectionMode,
-                                    audioDb = audioDb,
-                                    pushToTalkEnabled = uiState.pushToTalkEnabled,
-                                    isPttPressed = uiState.isPttPressed,
-                                    onPttPressChange = { viewModel.setPttPressed(it) },
-                                    onStartClick = { handleStartStream() },
-                                    onPauseClick = { viewModel.togglePause() },
-                                    onStopClick = { viewModel.stopStreaming(context) }
-                                )
-
-                                if (uiState.visualizerEnabled) {
-                                    AudioVisualizer(
-                                        snapshot = visualizerSnapshot,
-                                        style = uiState.visualizerStyle,
-                                        isRunning = uiState.isRunning,
-                                        isPaused = uiState.isPaused,
-                                        isPttMuted = isPttMuted
-                                    )
-                                }
-
-                                ScreenAwakeControl(
-                                    keepAwake = uiState.keepScreenAwake,
-                                    onKeepAwakeChange = { viewModel.setKeepScreenAwake(it) }
-                                )
-
-                                FloatingOverlayControl(
-                                    isEnabled = uiState.isOverlayEnabled,
-                                    onToggle = { viewModel.toggleFloatingOverlay(context, it) }
-                                )
-
-                                NetworkConfigSection(
-                                    ip = uiState.ip,
-                                    port = uiState.port,
-                                    isValidIp = viewModel.isValidIp(uiState.ip),
-                                    isValidPort = viewModel.isValidPort(uiState.port),
-                                    isEnabled = !uiState.isRunning,
-                                    isScanningPc = uiState.isScanningPc,
-                                    scanFeedback = uiState.scanFeedback,
-                                    onIpChange = { viewModel.setIp(it) },
-                                    onPortChange = { viewModel.setPort(it) },
-                                    onScanClick = { viewModel.scanForPc(context) },
-                                    onScanQrClick = {
-                                        val hasCam = ContextCompat.checkSelfPermission(
-                                            context,
-                                            Manifest.permission.CAMERA
-                                        ) == PackageManager.PERMISSION_GRANTED
-                                        if (hasCam) {
-                                            viewModel.setQrScannerVisible(true)
-                                        } else {
-                                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                        }
-                                    },
-                                    connectionMode = uiState.connectionMode,
-                                    transportMode = uiState.transportMode,
-                                    onConnectionModeChange = { viewModel.setConnectionMode(it) },
-                                    onTransportModeChange = { viewModel.setTransportMode(it) }
-                                )
-
-                                GainBoostControl(
-                                    micMode = uiState.micMode,
-                                    gain = uiState.gain,
-                                    isEnabled = !uiState.isRunning,
-                                    onMicModeChange = { viewModel.setMicMode(it) },
-                                    onGainChange = { viewModel.setGain(it) }
-                                )
-
-                                AudioQualitySelector(
-                                    selectedQuality = uiState.audioQuality,
-                                    isEnabled = !uiState.isRunning,
-                                    onQualitySelected = { viewModel.setAudioQuality(it) }
-                                )
-                            }
-
-                            1 -> {
-                                StreamTelemetryCard(
-                                    isRunning = uiState.isRunning,
-                                    isPaused = uiState.isPaused,
-                                    isConnected = uiState.isConnected,
-                                    packetsSent = uiState.packetsSent,
-                                    bytesSent = uiState.bytesSent,
-                                    packetRate = uiState.packetRate,
-                                    transportMode = uiState.transportMode,
-                                    ip = uiState.ip,
-                                    port = uiState.port,
-                                    connectionMode = uiState.connectionMode,
-                                    elapsedSeconds = uiState.elapsedSeconds,
-                                    audioQuality = uiState.audioQuality,
-                                    sampleRateHz = uiState.sampleRateHz,
-                                    audioFormat = uiState.audioFormat,
-                                    channels = uiState.channels,
-                                    selectedMicName = selectedMicName
-                                )
-
-                                OutlinedButton(
-                                    onClick = { viewModel.setGuideDialogVisible(true) },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(48.dp),
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan)
-                                ) {
-                                    Icon(Icons.Default.HelpOutline, contentDescription = null, modifier = Modifier.size(15.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Open Receiver Guide & Setup", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
+                    MainTab.SETTINGS -> SettingsScreen(
+                        uiState = uiState,
+                        onBackToHome = { viewModel.setActiveTab(MainTab.HOME) },
+                        onAutoStartChange = { viewModel.setAutoStartStreaming(it) },
+                        onPushToTalkChange = { viewModel.setPushToTalkEnabled(it) },
+                        onAutoReconnectChange = { viewModel.setAutoReconnectEnabled(it) },
+                        onKeepScreenAwakeChange = { viewModel.setKeepScreenAwake(it) },
+                        onOverlayToggle = { viewModel.toggleFloatingOverlay(context, it) },
+                        onTransportModeChange = { viewModel.setTransportMode(it) },
+                        onRefreshMics = { viewModel.refreshAvailableMics() },
+                        onSelectMicDevice = { viewModel.setPreferredMicDevice(it) },
+                        onSelectAudioSource = { viewModel.setMicMode(it) },
+                        onSelectSampleRate = { viewModel.setSampleRate(it) },
+                        onSelectAudioFormat = { viewModel.setAudioFormat(it) },
+                        onSelectChannels = { viewModel.setChannels(it) },
+                        onGainChange = { viewModel.setGain(it) },
+                        onDarkModeChange = { viewModel.setDarkMode(it) },
+                        onOledBlackChange = { viewModel.setOledBlackEnabled(it) },
+                        onPaletteStyleChange = { viewModel.setPaletteStyle(it) },
+                        onThemeColorPresetChange = { viewModel.setThemeColorPreset(it) },
+                        onCustomThemeColorChange = { viewModel.setCustomThemeColor(it) },
+                        onVisualizerEnabledChange = { viewModel.setVisualizerEnabled(it) },
+                        onVisualizerStyleChange = { viewModel.setVisualizerStyle(it) },
+                        onOpenGuide = { viewModel.setGuideDialogVisible(true) },
+                        onShareCli = { ShareHelper.shareCliReceiver(context) }
+                    )
                 }
             }
         }
@@ -621,16 +321,15 @@ fun PhoneMicScreen(
             title = {
                 Text(
                     text = "Microphone Access Required",
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = "PhoneMic needs microphone permission to capture your voice and stream it in real time to your PC.",
-                        color = TextSecondary,
+                        color = colors.textSecondary,
                         fontSize = 12.sp,
                         lineHeight = 16.sp
                     )
@@ -640,7 +339,7 @@ fun PhoneMicScreen(
                         } else {
                             "Please grant microphone access in system settings to use PhoneMic."
                         },
-                        color = NeonCyan,
+                        color = colors.accent,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Medium,
                         lineHeight = 15.sp
@@ -652,11 +351,7 @@ fun PhoneMicScreen(
                     onClick = {
                         showMicPermissionRationaleDialog = false
                         DeviceProfile.openAppDetailsSettings(context)
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = NeonCyan,
-                        contentColor = Color(0xFF003038)
-                    )
+                    }
                 ) {
                     Text("Open Settings", fontWeight = FontWeight.Bold)
                 }
@@ -665,10 +360,10 @@ fun PhoneMicScreen(
                 OutlinedButton(
                     onClick = { showMicPermissionRationaleDialog = false }
                 ) {
-                    Text("Dismiss", color = TextSecondary)
+                    Text("Dismiss")
                 }
             },
-            containerColor = Color(0xFF141F2E),
+            containerColor = colors.cardSurface,
             shape = RoundedCornerShape(14.dp)
         )
     }

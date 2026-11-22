@@ -24,12 +24,20 @@ import com.example.audio.AudioProtocol
 import com.example.audio.InputMicDevice
 import com.example.audio.VisualizerSnapshot
 import com.example.audio.VisualizerStyle
+import com.example.ui.theme.AppPaletteStyle
+import com.example.ui.theme.ThemeColorPreset
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.util.regex.Pattern
 import kotlin.math.max
+
+enum class MainTab {
+    STATUS,
+    HOME,
+    SETTINGS
+}
 
 data class PhoneMicUiState(
     val ip: String = "192.168.1.100",
@@ -79,8 +87,16 @@ data class PhoneMicUiState(
     val autoReconnectEnabled: Boolean = false,
     val visualizerEnabled: Boolean = true,
     val visualizerStyle: VisualizerStyle = VisualizerStyle.WAVEFORM,
+    // Redesign UI & Appearance preferences
+    val activeTab: MainTab = MainTab.HOME,
+    val isDarkMode: Boolean = true,
+    val oledBlackEnabled: Boolean = false,
+    val paletteStyle: AppPaletteStyle = AppPaletteStyle.TONAL_SPOT,
+    val themeColorPreset: ThemeColorPreset = ThemeColorPreset.DEFAULT,
+    val customThemeColorArgb: Long = 0xFF0EA5E9L,
     // Stream telemetry matched with PC Receiver
     val packetsSent: Long = 0L,
+    val packetsDropped: Long = 0L,
     val bytesSent: Long = 0L,
     val packetRate: Float = 0f,
     val receiverVersion: String = "Receiver v${BuildConfig.VERSION_NAME}",
@@ -111,6 +127,11 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         private const val PREF_AUTO_RECONNECT = "auto_reconnect_enabled"
         private const val PREF_VISUALIZER_ENABLED = "visualizer_enabled"
         private const val PREF_VISUALIZER_STYLE = "visualizer_style"
+        private const val PREF_DARK_MODE = "dark_mode_enabled"
+        private const val PREF_OLED_BLACK = "oled_black_enabled"
+        private const val PREF_PALETTE_STYLE = "palette_style"
+        private const val PREF_THEME_COLOR_PRESET = "theme_color_preset"
+        private const val PREF_CUSTOM_THEME_COLOR = "custom_theme_color_argb"
 
         private val IPV4_PATTERN = Pattern.compile(
             "^((25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\.){3}(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)$"
@@ -191,6 +212,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
                     audioDb = -60f,
                     elapsedSeconds = 0L,
                     packetsSent = 0L,
+                    packetsDropped = 0L,
                     bytesSent = 0L,
                     packetRate = 0f
                 )
@@ -233,6 +255,11 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         val savedAutoReconnect = prefs.getBoolean(PREF_AUTO_RECONNECT, false)
         val savedVizEnabled = prefs.getBoolean(PREF_VISUALIZER_ENABLED, true)
         val savedVizStyle = VisualizerStyle.fromId(prefs.getString(PREF_VISUALIZER_STYLE, VisualizerStyle.WAVEFORM.id))
+        val savedDarkMode = prefs.getBoolean(PREF_DARK_MODE, true)
+        val savedOledBlack = prefs.getBoolean(PREF_OLED_BLACK, false)
+        val savedPalette = AppPaletteStyle.fromId(prefs.getString(PREF_PALETTE_STYLE, AppPaletteStyle.TONAL_SPOT.id))
+        val savedThemeColorPreset = ThemeColorPreset.fromId(prefs.getString(PREF_THEME_COLOR_PRESET, ThemeColorPreset.DEFAULT.id))
+        val savedCustomColorArgb = prefs.getLong(PREF_CUSTOM_THEME_COLOR, 0xFF0EA5E9L)
 
         val app = getApplication<Application>()
         val hasMic = ContextCompat.checkSelfPermission(
@@ -271,6 +298,11 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             autoReconnectEnabled = savedAutoReconnect,
             visualizerEnabled = savedVizEnabled,
             visualizerStyle = savedVizStyle,
+            isDarkMode = savedDarkMode,
+            oledBlackEnabled = savedOledBlack,
+            paletteStyle = savedPalette,
+            themeColorPreset = savedThemeColorPreset,
+            customThemeColorArgb = savedCustomColorArgb,
             keepScreenAwake = savedKeepScreenAwake,
             isOverlayEnabled = savedOverlay,
             hasMicPermission = hasMic,
@@ -447,11 +479,56 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         savePreferences()
     }
 
-    fun setSettingsVisible(visible: Boolean) {
-        if (visible) {
+    fun setActiveTab(tab: MainTab) {
+        if (tab == MainTab.SETTINGS) {
             refreshAvailableMics()
         }
-        _uiState.update { it.copy(showSettings = visible) }
+        _uiState.update {
+            it.copy(
+                activeTab = tab,
+                showSettings = tab == MainTab.SETTINGS
+            )
+        }
+    }
+
+    fun setSettingsVisible(visible: Boolean) {
+        setActiveTab(if (visible) MainTab.SETTINGS else MainTab.HOME)
+    }
+
+    fun setDarkMode(dark: Boolean) {
+        _uiState.update { it.copy(isDarkMode = dark) }
+        savePreferences()
+    }
+
+    fun toggleDarkMode() {
+        _uiState.update { it.copy(isDarkMode = !it.isDarkMode) }
+        savePreferences()
+    }
+
+    fun setOledBlackEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(oledBlackEnabled = enabled) }
+        savePreferences()
+    }
+
+    fun setPaletteStyle(style: AppPaletteStyle) {
+        _uiState.update { it.copy(paletteStyle = style) }
+        savePreferences()
+    }
+
+    fun setThemeColorPreset(preset: ThemeColorPreset) {
+        _uiState.update { it.copy(themeColorPreset = preset) }
+        savePreferences()
+    }
+
+    fun setCustomThemeColor(argb: Long) {
+        val opaqueArgb = argb or 0xFF000000L
+        _uiState.update {
+            it.copy(
+                themeColorPreset = ThemeColorPreset.CUSTOM,
+                customThemeColorArgb = opaqueArgb
+            )
+        }
+        savePreferences()
     }
 
     fun checkPermissions(context: Context = getApplication()) {
@@ -721,6 +798,11 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             .putBoolean(PREF_AUTO_RECONNECT, state.autoReconnectEnabled)
             .putBoolean(PREF_VISUALIZER_ENABLED, state.visualizerEnabled)
             .putString(PREF_VISUALIZER_STYLE, state.visualizerStyle.id)
+            .putBoolean(PREF_DARK_MODE, state.isDarkMode)
+            .putBoolean(PREF_OLED_BLACK, state.oledBlackEnabled)
+            .putString(PREF_PALETTE_STYLE, state.paletteStyle.id)
+            .putString(PREF_THEME_COLOR_PRESET, state.themeColorPreset.id)
+            .putLong(PREF_CUSTOM_THEME_COLOR, state.customThemeColorArgb)
             .putBoolean(PREF_KEEP_SCREEN_AWAKE, state.keepScreenAwake)
             .putBoolean(PREF_OVERLAY, state.isOverlayEnabled)
             .apply()
@@ -762,10 +844,11 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         _visualizerSnapshot.value = snapshot
     }
 
-    override fun onTelemetry(packetsSent: Long, bytesSent: Long, packetRate: Float) {
+    override fun onTelemetry(packetsSent: Long, bytesSent: Long, packetRate: Float, packetsDropped: Long) {
         _uiState.update {
             it.copy(
                 packetsSent = packetsSent,
+                packetsDropped = packetsDropped,
                 bytesSent = bytesSent,
                 packetRate = packetRate
             )

@@ -1,63 +1,83 @@
 package com.example.ui.screens
 
-import androidx.activity.compose.BackHandler
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.BluetoothAudio
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.HeadsetMic
-import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Colorize
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,30 +90,35 @@ import com.example.R
 import com.example.audio.AudioChannelOption
 import com.example.audio.AudioFormatOption
 import com.example.audio.AudioProtocol
-import com.example.audio.MicDeviceKind
 import com.example.audio.VisualizerStyle
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.StreamWarningAmber
-import com.example.ui.theme.StudioBorder
-import com.example.ui.theme.StudioCard
-import com.example.ui.theme.StudioCardSelected
-import com.example.ui.theme.StudioDarkBg
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.AppPaletteStyle
+import com.example.ui.theme.JetBrainsMonoFontFamily
+import com.example.ui.theme.PhoneMicTheme
+import com.example.ui.theme.ThemeColorPreset
+import com.example.ui.theme.formatColorHex
 import java.util.Locale
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalLayoutApi::class)
+private data class DropdownChoice<T>(
+    val value: T,
+    val label: String,
+    val explanation: String,
+    val enabled: Boolean = true,
+    val tag: String,
+    val swatchColor: Color? = null
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     uiState: PhoneMicUiState,
-    onBack: () -> Unit,
+    onBackToHome: () -> Unit,
     onAutoStartChange: (Boolean) -> Unit,
     onPushToTalkChange: (Boolean) -> Unit,
     onAutoReconnectChange: (Boolean) -> Unit,
     onKeepScreenAwakeChange: (Boolean) -> Unit,
     onOverlayToggle: (Boolean) -> Unit,
+    onTransportModeChange: (String) -> Unit,
     onRefreshMics: () -> Unit,
     onSelectMicDevice: (Int) -> Unit,
     onSelectAudioSource: (String) -> Unit,
@@ -101,376 +126,221 @@ fun SettingsScreen(
     onSelectAudioFormat: (AudioFormatOption) -> Unit,
     onSelectChannels: (Int) -> Unit,
     onGainChange: (Float) -> Unit,
+    onDarkModeChange: (Boolean) -> Unit,
+    onOledBlackChange: (Boolean) -> Unit,
+    onPaletteStyleChange: (AppPaletteStyle) -> Unit,
+    onThemeColorPresetChange: (ThemeColorPreset) -> Unit,
+    onCustomThemeColorChange: (Long) -> Unit,
     onVisualizerEnabledChange: (Boolean) -> Unit,
     onVisualizerStyleChange: (VisualizerStyle) -> Unit,
     onOpenGuide: () -> Unit,
     onShareCli: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    BackHandler(onBack = onBack)
-
+    val colors = PhoneMicTheme.colors
+    val context = LocalContext.current
     val audioEditable = !uiState.isRunning
+    var showCustomColorDialog by remember { mutableStateOf(false) }
 
-    Scaffold(
+    Column(
         modifier = modifier
             .fillMaxSize()
-            .background(StudioDarkBg)
-            .testTag("settings_screen"),
-        containerColor = StudioDarkBg,
-        topBar = {
-            Column(
+            .testTag("settings_screen")
+    ) {
+        // Sticky Top Header Row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            IconButton(
+                onClick = onBackToHome,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .background(StudioDarkBg)
-                    .statusBarsPadding()
+                    .size(48.dp)
+                    .testTag("settings_back_button")
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .testTag("settings_back_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.settings_back_cd),
-                            tint = TextPrimary
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(4.dp))
-
-                    Column {
-                        Text(
-                            text = stringResource(R.string.settings_title),
-                            color = TextPrimary,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Stream, Audio Engine, Visualizer & App Info",
-                            color = TextMuted,
-                            fontSize = 11.sp
-                        )
-                    }
-                }
-                HorizontalDivider(color = StudioBorder)
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.settings_back_cd),
+                    tint = colors.textPrimary
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.settings_title),
+                    color = colors.textPrimary,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "General, Audio, Appearance & About",
+                    color = colors.textMuted,
+                    fontSize = 11.sp
+                )
             }
         }
-    ) { innerPadding ->
+
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
+                .fillMaxWidth()
+                .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 640.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            // =================================================================
+            // 1. GENERAL
+            // =================================================================
+            M3SettingsCard(
+                title = stringResource(R.string.settings_section_general),
+                icon = Icons.Default.Settings,
+                tag = "settings_section_general"
             ) {
-                // =============================================================
-                // 1. GENERAL
-                // =============================================================
-                SettingsSectionCard(
-                    title = stringResource(R.string.settings_section_general),
-                    icon = Icons.Default.Settings,
-                    sectionTag = "settings_section_general"
-                ) {
-                    SettingsSwitchRow(
-                        title = stringResource(R.string.setting_auto_start_title),
-                        subtitle = stringResource(R.string.setting_auto_start_desc),
-                        checked = uiState.autoStartStreaming,
-                        onCheckedChange = onAutoStartChange,
-                        tag = "setting_auto_start"
-                    )
-                    HorizontalDivider(color = Color(0xFF202C3D))
-                    SettingsSwitchRow(
-                        title = stringResource(R.string.setting_ptt_title),
-                        subtitle = stringResource(R.string.setting_ptt_desc),
-                        checked = uiState.pushToTalkEnabled,
-                        onCheckedChange = onPushToTalkChange,
-                        tag = "setting_ptt_mode"
-                    )
-                    HorizontalDivider(color = Color(0xFF202C3D))
-                    SettingsSwitchRow(
-                        title = stringResource(R.string.setting_auto_reconnect_title),
-                        subtitle = stringResource(R.string.setting_auto_reconnect_desc),
-                        checked = uiState.autoReconnectEnabled,
-                        onCheckedChange = onAutoReconnectChange,
-                        tag = "setting_auto_reconnect"
-                    )
-                    HorizontalDivider(color = Color(0xFF202C3D))
-                    SettingsSwitchRow(
-                        title = stringResource(R.string.setting_keep_awake_title),
-                        subtitle = stringResource(R.string.setting_keep_awake_desc),
-                        checked = uiState.keepScreenAwake,
-                        onCheckedChange = onKeepScreenAwakeChange,
-                        tag = "setting_keep_awake"
-                    )
-                    HorizontalDivider(color = Color(0xFF202C3D))
-                    SettingsSwitchRow(
-                        title = stringResource(R.string.setting_overlay_title),
-                        subtitle = stringResource(R.string.setting_overlay_desc),
-                        checked = uiState.isOverlayEnabled,
-                        onCheckedChange = onOverlayToggle,
-                        tag = "setting_overlay"
-                    )
+                SettingsSwitchListItem(
+                    title = stringResource(R.string.setting_auto_start_title),
+                    explanation = stringResource(R.string.setting_auto_start_desc),
+                    checked = uiState.autoStartStreaming,
+                    onCheckedChange = onAutoStartChange,
+                    tag = "setting_auto_start"
+                )
+                HorizontalDivider(color = colors.border)
+
+                SettingsSwitchListItem(
+                    title = stringResource(R.string.setting_ptt_title),
+                    explanation = stringResource(R.string.setting_ptt_desc),
+                    checked = uiState.pushToTalkEnabled,
+                    onCheckedChange = onPushToTalkChange,
+                    tag = "setting_ptt_mode"
+                )
+                HorizontalDivider(color = colors.border)
+
+                SettingsSwitchListItem(
+                    title = stringResource(R.string.setting_auto_reconnect_title),
+                    explanation = stringResource(R.string.setting_auto_reconnect_desc),
+                    checked = uiState.autoReconnectEnabled,
+                    onCheckedChange = onAutoReconnectChange,
+                    tag = "setting_auto_reconnect"
+                )
+                HorizontalDivider(color = colors.border)
+
+                SettingsSwitchListItem(
+                    title = stringResource(R.string.setting_keep_awake_title),
+                    explanation = stringResource(R.string.setting_keep_awake_desc),
+                    checked = uiState.keepScreenAwake,
+                    onCheckedChange = onKeepScreenAwakeChange,
+                    tag = "setting_keep_awake"
+                )
+                HorizontalDivider(color = colors.border)
+
+                SettingsSwitchListItem(
+                    title = stringResource(R.string.setting_overlay_title),
+                    explanation = stringResource(R.string.setting_overlay_desc),
+                    checked = uiState.isOverlayEnabled,
+                    onCheckedChange = { checked ->
+                        if (checked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+                            Toast.makeText(
+                                context,
+                                "Please allow 'Display over other apps' first",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            try {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:${context.packageName}")
+                                    ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                                )
+                            } catch (_: Exception) {}
+                        } else {
+                            onOverlayToggle(checked)
+                        }
+                    },
+                    tag = "setting_overlay"
+                )
+                HorizontalDivider(color = colors.border)
+
+                SettingsDropdownField(
+                    label = "Transport Protocol",
+                    explanation = "UDP delivers minimal voice latency; TCP adds automatic retransmission on unstable Wi-Fi.",
+                    selectedLabel = if (uiState.transportMode == PhoneMicService.TRANSPORT_UDP) "UDP (Low Latency)" else "TCP (Reliable)",
+                    options = listOf(
+                        DropdownChoice(
+                            value = PhoneMicService.TRANSPORT_UDP,
+                            label = "UDP (Low Latency)",
+                            explanation = "Fastest real-time voice with lowest jitter",
+                            tag = "transport_${PhoneMicService.TRANSPORT_UDP}"
+                        ),
+                        DropdownChoice(
+                            value = PhoneMicService.TRANSPORT_TCP,
+                            label = "TCP (Reliable)",
+                            explanation = "Ordered packet delivery for congested Wi-Fi",
+                            tag = "transport_${PhoneMicService.TRANSPORT_TCP}"
+                        )
+                    ),
+                    selectedValue = uiState.transportMode,
+                    enabled = audioEditable,
+                    onSelect = onTransportModeChange,
+                    anchorTag = "dropdown_transport_mode"
+                )
+            }
+
+            // =================================================================
+            // 2. AUDIO
+            // =================================================================
+            M3SettingsCard(
+                title = stringResource(R.string.settings_section_audio),
+                icon = Icons.Default.Tune,
+                tag = "settings_section_audio"
+            ) {
+                if (!audioEditable) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = colors.statusWarning.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, colors.statusWarning.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("audio_locked_banner")
+                    ) {
+                        Text(
+                            text = stringResource(R.string.setting_audio_locked_note),
+                            color = colors.statusWarning,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                        )
+                    }
                 }
 
-                // =============================================================
-                // 2. AUDIO
-                // =============================================================
-                SettingsSectionCard(
-                    title = stringResource(R.string.settings_section_audio),
-                    icon = Icons.Default.Tune,
-                    sectionTag = "settings_section_audio"
-                ) {
-                    if (!audioEditable) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color(0xFF332600), RoundedCornerShape(8.dp))
-                                .border(1.dp, StreamWarningAmber.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 10.dp, vertical = 8.dp)
-                                .testTag("audio_locked_banner")
-                        ) {
-                            Text(
-                                text = stringResource(R.string.setting_audio_locked_note),
-                                color = StreamWarningAmber,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-
-                    // 2A. Physical Microphone Device Picker
+                // Gain Boost Slider (always live)
+                val cleanGain = ((uiState.gain * 10f).roundToInt() / 10f).coerceIn(0.5f, 3.0f)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = stringResource(R.string.setting_physical_mic_title),
-                            color = TextPrimary,
+                            text = "Gain Boost",
+                            color = colors.textPrimary,
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        IconButton(
-                            onClick = onRefreshMics,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .testTag("refresh_mics_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = stringResource(R.string.setting_physical_mic_refresh),
-                                tint = NeonCyan,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        uiState.availableMics.forEach { mic ->
-                            val selected = uiState.preferredMicId == mic.id
-                            val micIcon = when (mic.kind) {
-                                MicDeviceKind.BLUETOOTH -> Icons.Default.BluetoothAudio
-                                MicDeviceKind.USB -> Icons.Default.Usb
-                                MicDeviceKind.WIRED -> Icons.Default.HeadsetMic
-                                else -> Icons.Default.Mic
-                            }
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (selected) StudioCardSelected else Color(0xFF101824))
-                                    .border(
-                                        1.dp,
-                                        if (selected) NeonCyan else Color(0xFF1E293B),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .alpha(if (audioEditable) 1f else 0.55f)
-                                    .clickable(enabled = audioEditable) { onSelectMicDevice(mic.id) }
-                                    .padding(horizontal = 10.dp)
-                                    .testTag("mic_device_${mic.id}"),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = micIcon,
-                                    contentDescription = null,
-                                    tint = if (selected) NeonCyan else TextSecondary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = mic.name,
-                                        color = if (selected) NeonCyan else TextPrimary,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = mic.typeLabel,
-                                        color = TextMuted,
-                                        fontSize = 10.sp,
-                                        maxLines = 1
-                                    )
-                                }
-                                if (selected) {
-                                    Text(
-                                        text = "ACTIVE",
-                                        color = NeonCyan,
-                                        fontSize = 9.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = Color(0xFF202C3D))
-
-                    // 2B. Android AudioSource Processing Mode
-                    SettingSubLabel(stringResource(R.string.setting_audio_source_title))
-                    val audioSources = listOf(
-                        Triple(PhoneMicService.MIC_STANDARD, "Standard", "Default MIC"),
-                        Triple(PhoneMicService.MIC_UNPROCESSED, "Unprocessed", "Studio Raw"),
-                        Triple(PhoneMicService.MIC_RAW, "Voice Recog.", "NS + Clean"),
-                        Triple(PhoneMicService.MIC_CALL, "Voice Comm.", "AEC + AGC"),
-                        Triple(PhoneMicService.MIC_CAMCORDER, "Camcorder", "Wide Room")
-                    )
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        audioSources.forEach { (mode, title, note) ->
-                            OptionChip(
-                                title = title,
-                                subtitle = note,
-                                selected = uiState.micMode == mode,
-                                enabled = audioEditable,
-                                onClick = { onSelectAudioSource(mode) },
-                                tag = "audio_source_$mode"
-                            )
-                        }
-                    }
-
-                    HorizontalDivider(color = Color(0xFF202C3D))
-
-                    // 2C. Sample Rate
-                    SettingSubLabel(stringResource(R.string.setting_sample_rate_title))
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        AudioProtocol.SUPPORTED_SAMPLE_RATES.forEach { rate ->
-                            val label = if (rate % 1000 == 0) "${rate / 1000} kHz" else "44.1 kHz"
-                            OptionChip(
-                                title = label,
-                                subtitle = "$rate Hz",
-                                selected = uiState.sampleRateHz == rate,
-                                enabled = audioEditable,
-                                onClick = { onSelectSampleRate(rate) },
-                                tag = "sample_rate_$rate"
-                            )
-                        }
-                    }
-
-                    HorizontalDivider(color = Color(0xFF202C3D))
-
-                    // 2D. Audio Format
-                    SettingSubLabel(stringResource(R.string.setting_audio_format_title))
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        AudioFormatOption.entries.forEach { fmt ->
-                            val supported = fmt.isSupportedOnDevice
-                            OptionChip(
-                                title = fmt.label,
-                                subtitle = if (supported) "${fmt.bytesPerSample * 8}-bit" else "Requires Android 12+",
-                                selected = uiState.audioFormat == fmt,
-                                enabled = audioEditable && supported,
-                                onClick = { onSelectAudioFormat(fmt) },
-                                tag = "audio_format_${fmt.id}"
-                            )
-                        }
-                    }
-
-                    HorizontalDivider(color = Color(0xFF202C3D))
-
-                    // 2E. Channels
-                    SettingSubLabel(stringResource(R.string.setting_channels_title))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AudioChannelOption.entries.forEach { chOpt ->
-                            val selected = uiState.channels == chOpt.count
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (selected) StudioCardSelected else Color(0xFF101824))
-                                    .border(
-                                        1.dp,
-                                        if (selected) NeonCyan else Color(0xFF1E293B),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .alpha(if (audioEditable) 1f else 0.55f)
-                                    .clickable(enabled = audioEditable) { onSelectChannels(chOpt.count) }
-                                    .testTag("channels_${chOpt.count}"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = chOpt.label,
-                                    color = if (selected) NeonCyan else TextPrimary,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
-                    // 2F. Gain Boost
-                    val cleanGain = ((uiState.gain * 10f).roundToInt() / 10f).coerceIn(0.5f, 3.0f)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Microphone Gain Boost",
-                            color = TextPrimary,
-                            fontSize = 12.5.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
                             text = String.format(Locale.US, "%.1fx", cleanGain),
-                            color = NeonCyan,
-                            fontFamily = FontFamily.Monospace,
+                            color = colors.accent,
+                            fontFamily = JetBrainsMonoFontFamily,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
+                    Text(
+                        text = "Boosts or attenuates captured microphone loudness (0.5x to 3.0x) live during streaming.",
+                        color = colors.textMuted,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp
+                    )
                     Slider(
                         value = cleanGain,
                         onValueChange = { raw ->
@@ -479,347 +349,930 @@ fun SettingsScreen(
                         valueRange = 0.5f..3.0f,
                         steps = 24,
                         colors = SliderDefaults.colors(
-                            thumbColor = NeonCyan,
-                            activeTrackColor = NeonCyan,
-                            inactiveTrackColor = Color(0xFF192535)
+                            thumbColor = colors.accent,
+                            activeTrackColor = colors.accent,
+                            inactiveTrackColor = colors.nestedSurface
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("settings_gain_slider")
                     )
+                }
 
-                    // Live Wire Packet Readout
-                    val kbps = AudioProtocol.estimatedKbps(uiState.sampleRateHz, uiState.channels, uiState.audioFormat)
-                    val frameBytes = AudioProtocol.framePayloadBytes(uiState.sampleRateHz, uiState.channels, uiState.audioFormat)
-                    val proto = if (AudioProtocol.isLegacyStandardStream(uiState.sampleRateHz, uiState.channels, uiState.audioFormat)) {
-                        "PM01–PM03 Standard"
-                    } else {
-                        "PM04 Extended Header"
-                    }
-                    Box(
+                HorizontalDivider(color = colors.border)
+
+                // Physical Microphone Dropdown + Refresh button
+                val selectedMic = uiState.availableMics.firstOrNull { it.id == uiState.preferredMicId }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    SettingsDropdownField(
+                        label = stringResource(R.string.setting_physical_mic_title),
+                        explanation = "Selects whether audio captures from built-in, headset, USB, or Bluetooth microphones.",
+                        selectedLabel = selectedMic?.let { "${it.name} (${it.typeLabel})" } ?: "System Default",
+                        options = uiState.availableMics.map { mic ->
+                            DropdownChoice(
+                                value = mic.id,
+                                label = "${mic.name} (${mic.typeLabel})",
+                                explanation = if (mic.isSystemDefault) "Lets Android pick the active default mic" else "Route capture directly to ${mic.typeLabel}",
+                                tag = "mic_device_${mic.id}"
+                            )
+                        },
+                        selectedValue = uiState.preferredMicId,
+                        enabled = audioEditable,
+                        onSelect = onSelectMicDevice,
+                        anchorTag = "dropdown_mic_device",
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    FilledTonalIconButton(
+                        onClick = onRefreshMics,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = colors.nestedSurface,
+                            contentColor = colors.accent
+                        ),
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color(0xFF0E1622), RoundedCornerShape(8.dp))
-                            .border(1.dp, Color(0xFF1E2A3C), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                            .testTag("audio_wire_summary")
+                            .padding(top = 6.dp)
+                            .size(52.dp)
+                            .testTag("refresh_mics_button")
                     ) {
-                        Text(
-                            text = "~$kbps kbps  •  $frameBytes B / 10 ms  •  $proto",
-                            color = NeonCyan,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = stringResource(R.string.setting_physical_mic_refresh)
                         )
                     }
                 }
 
-                // =============================================================
-                // 3. APPEARANCE
-                // =============================================================
-                SettingsSectionCard(
-                    title = stringResource(R.string.settings_section_appearance),
-                    icon = Icons.Default.Palette,
-                    sectionTag = "settings_section_appearance"
-                ) {
-                    SettingsSwitchRow(
-                        title = stringResource(R.string.setting_visualizer_title),
-                        subtitle = stringResource(R.string.setting_visualizer_desc),
-                        checked = uiState.visualizerEnabled,
-                        onCheckedChange = onVisualizerEnabledChange,
-                        tag = "setting_visualizer_toggle"
+                HorizontalDivider(color = colors.border)
+
+                // Android AudioSource Dropdown
+                val sourceChoices = listOf(
+                    DropdownChoice(PhoneMicService.MIC_STANDARD, "Standard Mic", "Balanced hardware microphone input", tag = "audio_source_${PhoneMicService.MIC_STANDARD}"),
+                    DropdownChoice(PhoneMicService.MIC_UNPROCESSED, "Unprocessed (Raw)", "Bypasses AGC and phone noise filtering when supported", tag = "audio_source_${PhoneMicService.MIC_UNPROCESSED}"),
+                    DropdownChoice(PhoneMicService.MIC_RAW, "Voice Recognition", "Tuned for clear near-field speech", tag = "audio_source_${PhoneMicService.MIC_RAW}"),
+                    DropdownChoice(PhoneMicService.MIC_CALL, "Voice Communication", "Hardware echo cancellation & voice isolation", tag = "audio_source_${PhoneMicService.MIC_CALL}"),
+                    DropdownChoice(PhoneMicService.MIC_CAMCORDER, "Camcorder Mic", "Wide dynamic range for room & ambient audio", tag = "audio_source_${PhoneMicService.MIC_CAMCORDER}")
+                )
+                SettingsDropdownField(
+                    label = stringResource(R.string.setting_audio_source_title),
+                    explanation = "Chooses Android's internal capture preset (raw vs hardware noise suppression/AGC).",
+                    selectedLabel = sourceChoices.firstOrNull { it.value == uiState.micMode }?.label ?: "Standard Mic",
+                    options = sourceChoices,
+                    selectedValue = uiState.micMode,
+                    enabled = audioEditable,
+                    onSelect = onSelectAudioSource,
+                    anchorTag = "dropdown_audio_source"
+                )
+
+                HorizontalDivider(color = colors.border)
+
+                // Sample Rate Dropdown
+                val rateLabel: (Int) -> String = { r -> if (r % 1000 == 0) "${r / 1000} kHz" else "44.1 kHz" }
+                val rateChoices = AudioProtocol.SUPPORTED_SAMPLE_RATES.map { rate ->
+                    val desc = when (rate) {
+                        48000 -> "Studio standard clarity & best compatibility"
+                        44100 -> "CD-quality frequency"
+                        32000 -> "High speech clarity with lower traffic"
+                        24000 -> "Balanced voice quality & bandwidth"
+                        16000 -> "Lightweight bandwidth for weaker Wi-Fi"
+                        else -> "Ultra-low bandwidth narrowband voice"
+                    }
+                    DropdownChoice(
+                        value = rate,
+                        label = rateLabel(rate),
+                        explanation = desc,
+                        tag = "sample_rate_$rate"
                     )
-
-                    HorizontalDivider(color = Color(0xFF202C3D))
-
-                    SettingSubLabel(stringResource(R.string.setting_visualizer_style_title))
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        VisualizerStyle.entries.forEach { style ->
-                            val selected = uiState.visualizerStyle == style
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (selected) StudioCardSelected else Color(0xFF101824))
-                                    .border(
-                                        1.dp,
-                                        if (selected) NeonCyan else Color(0xFF1E293B),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .alpha(if (uiState.visualizerEnabled) 1f else 0.55f)
-                                    .clickable(enabled = uiState.visualizerEnabled) {
-                                        onVisualizerStyleChange(style)
-                                    }
-                                    .padding(horizontal = 10.dp)
-                                    .testTag("visualizer_style_${style.id}"),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.GraphicEq,
-                                    contentDescription = null,
-                                    tint = if (selected) NeonCyan else TextSecondary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = style.label,
-                                        color = if (selected) NeonCyan else TextPrimary,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                                    )
-                                    Text(
-                                        text = style.description,
-                                        color = TextMuted,
-                                        fontSize = 10.sp
-                                    )
-                                }
-                                if (selected) {
-                                    Text(
-                                        text = "SELECTED",
-                                        color = NeonCyan,
-                                        fontSize = 9.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color(0xFF101824), RoundedCornerShape(8.dp))
-                            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(8.dp))
-                            .padding(10.dp)
-                            .testTag("appearance_redesign_note")
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = stringResource(R.string.setting_appearance_redesign_title),
-                                color = TextPrimary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = stringResource(R.string.setting_appearance_redesign_desc),
-                                color = TextMuted,
-                                fontSize = 11.sp,
-                                lineHeight = 15.sp
-                            )
-                        }
-                    }
                 }
+                SettingsDropdownField(
+                    label = stringResource(R.string.setting_sample_rate_title),
+                    explanation = "Sets audio capture frequency per second; higher kHz captures crisper detail.",
+                    selectedLabel = rateLabel(uiState.sampleRateHz),
+                    options = rateChoices,
+                    selectedValue = uiState.sampleRateHz,
+                    enabled = audioEditable,
+                    onSelect = onSelectSampleRate,
+                    anchorTag = "dropdown_sample_rate"
+                )
 
-                // =============================================================
-                // 4. ABOUT
-                // =============================================================
-                SettingsSectionCard(
-                    title = stringResource(R.string.settings_section_about),
-                    icon = Icons.Default.Info,
-                    sectionTag = "settings_section_about"
-                ) {
-                    AboutInfoRow(
-                        label = stringResource(R.string.setting_about_version),
-                        value = "v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})"
-                    )
-                    AboutInfoRow(
-                        label = stringResource(R.string.setting_about_device),
-                        value = "${DeviceProfile.deviceDisplayName} • ${DeviceProfile.osDisplayName}"
-                    )
-                    AboutInfoRow(
-                        label = stringResource(R.string.setting_about_protocol),
-                        value = stringResource(R.string.setting_about_protocol_val)
-                    )
+                HorizontalDivider(color = colors.border)
 
-                    HorizontalDivider(color = Color(0xFF202C3D))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = onOpenGuide,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("settings_open_guide_button"),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan)
-                        ) {
-                            Icon(Icons.Default.HelpOutline, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = stringResource(R.string.setting_about_guide),
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1
-                            )
-                        }
-
-                        OutlinedButton(
-                            onClick = onShareCli,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("settings_share_cli_button"),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
-                        ) {
-                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = stringResource(R.string.setting_about_share_cli),
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1
-                            )
-                        }
+                // Audio Format Dropdown
+                val formatChoices = AudioFormatOption.entries.map { fmt ->
+                    val supported = fmt.isSupportedOnDevice
+                    val desc = when (fmt) {
+                        AudioFormatOption.PCM_16BIT -> "Recommended standard bit depth for voice & OBS"
+                        AudioFormatOption.PCM_8BIT -> "Half bandwidth, compact retro/voice mode"
+                        AudioFormatOption.PCM_24BIT -> if (supported) "Extended studio dynamic range (PM04)" else "Requires Android 12+ (API 31+)"
+                        AudioFormatOption.PCM_FLOAT -> "32-bit floating point headroom (PM04)"
                     }
+                    DropdownChoice(
+                        value = fmt,
+                        label = if (supported) fmt.label else "${fmt.shortLabel} (API 31+)",
+                        explanation = desc,
+                        enabled = supported,
+                        tag = "audio_format_${fmt.id}"
+                    )
                 }
+                SettingsDropdownField(
+                    label = stringResource(R.string.setting_audio_format_title),
+                    explanation = "Determines sample precision (bit depth) vs network data rate.",
+                    selectedLabel = uiState.audioFormat.label,
+                    options = formatChoices,
+                    selectedValue = uiState.audioFormat,
+                    enabled = audioEditable,
+                    onSelect = onSelectAudioFormat,
+                    anchorTag = "dropdown_audio_format"
+                )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = colors.border)
+
+                // Channels Dropdown
+                val channelChoices = AudioChannelOption.entries.map { ch ->
+                    DropdownChoice(
+                        value = ch.count,
+                        label = ch.label,
+                        explanation = if (ch.count == 1) "Single voice channel — halves network load" else "Dual-channel capture for stereo devices (PM04)",
+                        tag = "channels_${ch.count}"
+                    )
+                }
+                SettingsDropdownField(
+                    label = stringResource(R.string.setting_channels_title),
+                    explanation = "Mono focuses on speech clarity; Stereo transmits left and right channels.",
+                    selectedLabel = AudioChannelOption.fromCount(uiState.channels).label,
+                    options = channelChoices,
+                    selectedValue = uiState.channels,
+                    enabled = audioEditable,
+                    onSelect = onSelectChannels,
+                    anchorTag = "dropdown_channels"
+                )
+
+                val kbps = AudioProtocol.estimatedKbps(uiState.sampleRateHz, uiState.channels, uiState.audioFormat)
+                val payload = AudioProtocol.framePayloadBytes(uiState.sampleRateHz, uiState.channels, uiState.audioFormat)
+                val protoLabel = if (AudioProtocol.isLegacyStandardStream(uiState.sampleRateHz, uiState.channels, uiState.audioFormat)) {
+                    "PM01–PM03 Standard"
+                } else {
+                    "PM04 Extended"
+                }
+                Text(
+                    text = "~$kbps kbps • $payload B / 10 ms • $protoLabel",
+                    color = colors.accent,
+                    fontSize = 11.sp,
+                    fontFamily = JetBrainsMonoFontFamily,
+                    modifier = Modifier.testTag("audio_wire_summary")
+                )
             }
+
+            // =================================================================
+            // 3. APPEARANCE (Dropdowns + Theme Color Picker + Explanations)
+            // =================================================================
+            M3SettingsCard(
+                title = stringResource(R.string.settings_section_appearance),
+                icon = Icons.Default.Palette,
+                tag = "settings_section_appearance"
+            ) {
+                // Theme Mode Dropdown
+                SettingsDropdownField(
+                    label = stringResource(R.string.setting_theme_mode_title),
+                    explanation = "Switches between high-contrast Dark (#121212) and bright Light studio surfaces.",
+                    selectedLabel = if (uiState.isDarkMode) "Dark (#121212)" else "Light",
+                    options = listOf(
+                        DropdownChoice(true, "Dark (#121212)", "Low-glare studio background for dim rooms", tag = "theme_mode_dark"),
+                        DropdownChoice(false, "Light", "Crisp daylight theme with dark text", tag = "theme_mode_light")
+                    ),
+                    selectedValue = uiState.isDarkMode,
+                    enabled = true,
+                    onSelect = onDarkModeChange,
+                    anchorTag = "dropdown_theme_mode"
+                )
+
+                HorizontalDivider(color = colors.border)
+
+                SettingsSwitchListItem(
+                    title = stringResource(R.string.setting_oled_colors_title),
+                    explanation = stringResource(R.string.setting_oled_colors_desc),
+                    checked = uiState.oledBlackEnabled,
+                    onCheckedChange = onOledBlackChange,
+                    tag = "setting_oled_colors"
+                )
+
+                HorizontalDivider(color = colors.border)
+
+                // Palette Style Dropdown
+                SettingsDropdownField(
+                    label = stringResource(R.string.setting_palette_style_title),
+                    explanation = "Adjusts overall surface tinting and UI contrast mood across dark and light modes.",
+                    selectedLabel = uiState.paletteStyle.label,
+                    options = AppPaletteStyle.entries.map { palette ->
+                        DropdownChoice(
+                            value = palette,
+                            label = palette.label,
+                            explanation = palette.description,
+                            tag = "palette_style_${palette.id}",
+                            swatchColor = palette.previewColor
+                        )
+                    },
+                    selectedValue = uiState.paletteStyle,
+                    enabled = true,
+                    onSelect = onPaletteStyleChange,
+                    anchorTag = "dropdown_palette_style",
+                    selectedSwatchColor = uiState.paletteStyle.previewColor
+                )
+
+                HorizontalDivider(color = colors.border)
+
+                // Theme Color Dropdown (Default Presets + Custom Color Picker trigger)
+                val activeThemeSwatch: Color = when (uiState.themeColorPreset) {
+                    ThemeColorPreset.DEFAULT -> colors.accent
+                    ThemeColorPreset.CUSTOM -> Color((uiState.customThemeColorArgb or 0xFF000000L).toInt())
+                    else -> Color((uiState.themeColorPreset.colorArgb ?: 0xFF0EA5E9L).toInt())
+                }
+                val selectedThemeColorLabel = if (uiState.themeColorPreset == ThemeColorPreset.CUSTOM) {
+                    "Custom (${formatColorHex(uiState.customThemeColorArgb)})"
+                } else {
+                    uiState.themeColorPreset.label
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    SettingsDropdownField(
+                        label = stringResource(R.string.setting_theme_color_title),
+                        explanation = stringResource(R.string.setting_theme_color_desc),
+                        selectedLabel = selectedThemeColorLabel,
+                        options = ThemeColorPreset.entries.map { preset ->
+                            val dot = when (preset) {
+                                ThemeColorPreset.DEFAULT -> colors.accent
+                                ThemeColorPreset.CUSTOM -> Color((uiState.customThemeColorArgb or 0xFF000000L).toInt())
+                                else -> Color((preset.colorArgb ?: 0xFF0EA5E9L).toInt())
+                            }
+                            DropdownChoice(
+                                value = preset,
+                                label = if (preset == ThemeColorPreset.CUSTOM) "Custom Color Picker…" else preset.label,
+                                explanation = preset.description,
+                                tag = "theme_color_${preset.id}",
+                                swatchColor = dot
+                            )
+                        },
+                        selectedValue = uiState.themeColorPreset,
+                        enabled = true,
+                        onSelect = { preset ->
+                            if (preset == ThemeColorPreset.CUSTOM) {
+                                showCustomColorDialog = true
+                            } else {
+                                onThemeColorPresetChange(preset)
+                            }
+                        },
+                        anchorTag = "dropdown_theme_color",
+                        selectedSwatchColor = activeThemeSwatch,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    FilledTonalIconButton(
+                        onClick = { showCustomColorDialog = true },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = colors.accentSoftBg,
+                            contentColor = colors.accent
+                        ),
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .size(52.dp)
+                            .testTag("open_color_picker_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Colorize,
+                            contentDescription = stringResource(R.string.setting_custom_color_action)
+                        )
+                    }
+                }
+
+                if (uiState.themeColorPreset == ThemeColorPreset.CUSTOM) {
+                    var hexInput by remember { mutableStateOf(formatColorHex(uiState.customThemeColorArgb)) }
+                    LaunchedEffect(uiState.customThemeColorArgb) {
+                        val externalHex = formatColorHex(uiState.customThemeColorArgb)
+                        val currentClean = hexInput.trim().removePrefix("#").uppercase(Locale.US)
+                        val externalClean = externalHex.removePrefix("#").uppercase(Locale.US)
+                        if (currentClean != externalClean) {
+                            hexInput = externalHex
+                        }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedTextField(
+                            value = hexInput,
+                            onValueChange = { raw ->
+                                hexInput = raw
+                                val normalized = raw.trim().removePrefix("#")
+                                if (normalized.length == 6) {
+                                    normalized.toLongOrNull(16)?.let { rgb ->
+                                        onCustomThemeColorChange(0xFF000000L or rgb)
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            label = { Text("Custom Hex Color (#RRGGBB)", fontSize = 12.sp) },
+                            leadingIcon = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .background(activeThemeSwatch, CircleShape)
+                                )
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = colors.accent,
+                                unfocusedBorderColor = colors.border,
+                                focusedLabelColor = colors.accent,
+                                unfocusedLabelColor = colors.textSecondary,
+                                focusedTextColor = colors.textPrimary,
+                                unfocusedTextColor = colors.textPrimary,
+                                focusedContainerColor = colors.nestedSurface,
+                                unfocusedContainerColor = colors.nestedSurface
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("custom_color_hex_input")
+                        )
+                        Text(
+                            text = "Enter a 6-digit hex code directly or tap the eyedropper button to adjust Hue, Saturation, and Brightness sliders.",
+                            color = colors.textMuted,
+                            fontSize = 11.sp,
+                            lineHeight = 14.5.sp,
+                            modifier = Modifier.padding(horizontal = 2.dp)
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = colors.border)
+
+                SettingsSwitchListItem(
+                    title = stringResource(R.string.setting_visualizer_title),
+                    explanation = stringResource(R.string.setting_visualizer_desc),
+                    checked = uiState.visualizerEnabled,
+                    onCheckedChange = onVisualizerEnabledChange,
+                    tag = "setting_visualizer_toggle"
+                )
+
+                HorizontalDivider(color = colors.border)
+
+                // Visualizer Type Dropdown
+                SettingsDropdownField(
+                    label = stringResource(R.string.setting_visualizer_style_title),
+                    explanation = "Selects the live audio meter style rendered at the bottom of the Home screen.",
+                    selectedLabel = uiState.visualizerStyle.label,
+                    options = VisualizerStyle.entries.map { style ->
+                        DropdownChoice(
+                            value = style,
+                            label = style.label,
+                            explanation = style.description,
+                            tag = "visualizer_style_${style.id}"
+                        )
+                    },
+                    selectedValue = uiState.visualizerStyle,
+                    enabled = uiState.visualizerEnabled,
+                    onSelect = onVisualizerStyleChange,
+                    anchorTag = "dropdown_visualizer_style"
+                )
+            }
+
+            // =================================================================
+            // 4. ABOUT
+            // =================================================================
+            M3SettingsCard(
+                title = stringResource(R.string.settings_section_about),
+                icon = Icons.Default.Info,
+                tag = "settings_section_about"
+            ) {
+                CompactAboutRow(
+                    label = stringResource(R.string.setting_about_version),
+                    value = "v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})"
+                )
+                CompactAboutRow(
+                    label = stringResource(R.string.setting_about_device),
+                    value = "${DeviceProfile.deviceDisplayName} • ${DeviceProfile.osDisplayName}"
+                )
+                CompactAboutRow(
+                    label = stringResource(R.string.setting_about_protocol),
+                    value = stringResource(R.string.setting_about_protocol_val)
+                )
+                Text(
+                    text = "Open the PC setup guide for VB-CABLE routing & hotkeys, or export the lightweight Python CLI receiver script.",
+                    color = colors.textMuted,
+                    fontSize = 11.sp,
+                    lineHeight = 14.5.sp
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onOpenGuide,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("settings_open_guide_button"),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.accent)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.setting_about_guide),
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = onShareCli,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("settings_share_cli_button"),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.textPrimary)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.setting_about_share_cli),
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+
+    if (showCustomColorDialog) {
+        CustomThemeColorPickerDialog(
+            initialColorArgb = uiState.customThemeColorArgb,
+            onDismiss = { showCustomColorDialog = false },
+            onApplyColor = { argb ->
+                onCustomThemeColorChange(argb)
+                showCustomColorDialog = false
+            }
+        )
     }
 }
 
 @Composable
-private fun SettingsSectionCard(
+private fun M3SettingsCard(
     title: String,
     icon: ImageVector,
-    sectionTag: String,
+    tag: String,
     content: @Composable () -> Unit
 ) {
-    Column(
+    val colors = PhoneMicTheme.colors
+    OutlinedCard(
         modifier = Modifier
             .fillMaxWidth()
-            .background(StudioCard, RoundedCornerShape(14.dp))
-            .border(1.dp, StudioBorder, RoundedCornerShape(14.dp))
-            .padding(14.dp)
-            .testTag(sectionTag),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .testTag(tag),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.outlinedCardColors(containerColor = colors.cardSurface),
+        border = BorderStroke(1.dp, colors.border)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = NeonCyan,
-                modifier = Modifier.size(16.dp)
-            )
-            Text(
-                text = title,
-                color = NeonCyan,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = colors.accent,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = title,
+                    color = colors.accent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.8.sp
+                )
+            }
+            content()
         }
-        content()
     }
 }
 
 @Composable
-private fun SettingSubLabel(text: String) {
-    Text(
-        text = text,
-        color = TextPrimary,
-        fontSize = 12.5.sp,
-        fontWeight = FontWeight.SemiBold
-    )
-}
-
-@Composable
-private fun SettingsSwitchRow(
+private fun SettingsSwitchListItem(
     title: String,
-    subtitle: String,
+    explanation: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     tag: String
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onCheckedChange(!checked) }
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    val colors = PhoneMicTheme.colors
+    ListItem(
+        colors = ListItemDefaults.colors(
+            containerColor = Color.Transparent,
+            headlineColor = colors.textPrimary,
+            supportingColor = colors.textMuted
+        ),
+        headlineContent = {
             Text(
                 text = title,
-                color = TextPrimary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold
             )
+        },
+        supportingContent = {
             Text(
-                text = subtitle,
-                color = TextMuted,
+                text = explanation,
                 fontSize = 11.sp,
-                lineHeight = 14.sp
+                lineHeight = 14.5.sp
             )
+        },
+        trailingContent = {
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                modifier = Modifier.testTag(tag),
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = colors.onAccent,
+                    checkedTrackColor = colors.accent,
+                    uncheckedThumbColor = colors.textSecondary,
+                    uncheckedTrackColor = colors.nestedSurface
+                )
+            )
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun <T> SettingsDropdownField(
+    label: String,
+    explanation: String,
+    selectedLabel: String,
+    options: List<DropdownChoice<T>>,
+    selectedValue: T,
+    enabled: Boolean,
+    onSelect: (T) -> Unit,
+    anchorTag: String,
+    modifier: Modifier = Modifier,
+    selectedSwatchColor: Color? = null
+) {
+    val colors = PhoneMicTheme.colors
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.55f),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        ExposedDropdownMenuBox(
+            expanded = expanded && enabled,
+            onExpandedChange = { next -> if (enabled) expanded = next }
+        ) {
+            OutlinedTextField(
+                value = selectedLabel,
+                onValueChange = {},
+                readOnly = true,
+                enabled = enabled,
+                singleLine = true,
+                label = { Text(label, fontSize = 12.sp) },
+                leadingIcon = selectedSwatchColor?.let { dot ->
+                    {
+                        Box(
+                            modifier = Modifier
+                                .size(14.dp)
+                                .background(dot, CircleShape)
+                        )
+                    }
+                },
+                trailingIcon = {
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded && enabled)
+                },
+                shape = RoundedCornerShape(10.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = colors.accent,
+                    unfocusedBorderColor = colors.border,
+                    focusedLabelColor = colors.accent,
+                    unfocusedLabelColor = colors.textSecondary,
+                    focusedTextColor = colors.textPrimary,
+                    unfocusedTextColor = colors.textPrimary,
+                    focusedContainerColor = colors.nestedSurface,
+                    unfocusedContainerColor = colors.nestedSurface,
+                    disabledContainerColor = colors.nestedSurface.copy(alpha = 0.6f),
+                    disabledTextColor = colors.textMuted,
+                    disabledBorderColor = colors.border.copy(alpha = 0.6f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = enabled)
+                    .testTag(anchorTag)
+            )
+
+            ExposedDropdownMenu(
+                expanded = expanded && enabled,
+                onDismissRequest = { expanded = false },
+                containerColor = colors.cardSurface
+            ) {
+                options.forEach { option ->
+                    val isSelected = option.value == selectedValue
+                    DropdownMenuItem(
+                        enabled = option.enabled,
+                        leadingIcon = option.swatchColor?.let { dot ->
+                            {
+                                Box(
+                                    modifier = Modifier
+                                        .size(14.dp)
+                                        .background(dot, CircleShape)
+                                )
+                            }
+                        },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Text(
+                                    text = option.label,
+                                    color = if (isSelected) colors.accent else colors.textPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                )
+                                Text(
+                                    text = option.explanation,
+                                    color = colors.textMuted,
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp
+                                )
+                            }
+                        },
+                        trailingIcon = if (isSelected) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Selected",
+                                    tint = colors.accent,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        } else null,
+                        onClick = {
+                            expanded = false
+                            onSelect(option.value)
+                        },
+                        modifier = Modifier.testTag(option.tag)
+                    )
+                }
+            }
         }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier.testTag(tag),
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color(0xFF003038),
-                checkedTrackColor = NeonCyan,
-                uncheckedThumbColor = TextSecondary,
-                uncheckedTrackColor = Color(0xFF141E2C)
-            )
+
+        Text(
+            text = explanation,
+            color = colors.textMuted,
+            fontSize = 11.sp,
+            lineHeight = 14.5.sp,
+            modifier = Modifier.padding(horizontal = 2.dp)
         )
     }
 }
 
 @Composable
-private fun OptionChip(
-    title: String,
-    subtitle: String,
-    selected: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
+private fun CustomThemeColorPickerDialog(
+    initialColorArgb: Long,
+    onDismiss: () -> Unit,
+    onApplyColor: (Long) -> Unit
+) {
+    val colors = PhoneMicTheme.colors
+
+    val initialHsv = remember(initialColorArgb) {
+        FloatArray(3).also { out ->
+            android.graphics.Color.colorToHSV((initialColorArgb or 0xFF000000L).toInt(), out)
+        }
+    }
+
+    var hue by remember(initialColorArgb) { mutableFloatStateOf(initialHsv[0]) }
+    var saturation by remember(initialColorArgb) { mutableFloatStateOf(initialHsv[1].coerceAtLeast(0.15f)) }
+    var value by remember(initialColorArgb) { mutableFloatStateOf(initialHsv[2].coerceAtLeast(0.45f)) }
+
+    val activeColorInt = android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, value))
+    val activeColorLong = activeColorInt.toLong() and 0xFFFFFFFFL
+    val activeColor = Color(activeColorInt)
+
+    val quickSwatches = remember {
+        listOf(
+            0xFF0EA5E9L, 0xFF00D8F5L, 0xFF10B981L,
+            0xFF8B5CF6L, 0xFFF59E0BL, 0xFFF43F5EL,
+            0xFFEC4899L, 0xFF6366F1L
+        )
+    }
+
+    val previewTextColor = if (activeColor.luminance() > 0.42f) Color(0xFF09090B) else Color.White
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.cardSurface,
+        title = {
+            Text(
+                text = stringResource(R.string.custom_color_dialog_title),
+                color = colors.textPrimary,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Pick a quick swatch or adjust hue, saturation, and brightness sliders for buttons, switches, and visualizers.",
+                    color = colors.textMuted,
+                    fontSize = 11.5.sp,
+                    lineHeight = 15.sp
+                )
+
+                // Live Preview Swatch Banner
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = activeColor,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("custom_color_preview")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Accent Preview",
+                            color = previewTextColor,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = formatColorHex(activeColorLong),
+                            color = previewTextColor,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // Quick Preset Swatches (2 rows of 4, 48dp touch targets)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    quickSwatches.chunked(4).forEach { rowSwatches ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            rowSwatches.forEach { swatchArgb ->
+                                val swatchColor = Color(swatchArgb.toInt())
+                                val swatchHex = formatColorHex(swatchArgb)
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clickable {
+                                            val hsv = FloatArray(3)
+                                            android.graphics.Color.colorToHSV(swatchColor.toArgb(), hsv)
+                                            hue = hsv[0]
+                                            saturation = hsv[1]
+                                            value = hsv[2]
+                                        }
+                                        .testTag("color_swatch_$swatchHex"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = swatchColor,
+                                        border = BorderStroke(1.5.dp, colors.border),
+                                        modifier = Modifier.size(30.dp)
+                                    ) {}
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Hue Slider
+                ColorComponentSlider(
+                    label = "Hue",
+                    valueText = "${hue.roundToInt()}°",
+                    value = hue,
+                    valueRange = 0f..360f,
+                    onValueChange = { hue = it },
+                    accent = activeColor,
+                    tag = "color_slider_hue"
+                )
+
+                // Saturation Slider
+                ColorComponentSlider(
+                    label = "Saturation",
+                    valueText = "${(saturation * 100f).roundToInt()}%",
+                    value = saturation,
+                    valueRange = 0f..1f,
+                    onValueChange = { saturation = it },
+                    accent = activeColor,
+                    tag = "color_slider_saturation"
+                )
+
+                // Brightness Slider
+                ColorComponentSlider(
+                    label = "Brightness",
+                    valueText = "${(value * 100f).roundToInt()}%",
+                    value = value,
+                    valueRange = 0.2f..1f,
+                    onValueChange = { value = it },
+                    accent = activeColor,
+                    tag = "color_slider_brightness"
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onApplyColor(activeColorLong) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = activeColor,
+                    contentColor = previewTextColor
+                ),
+                modifier = Modifier.testTag("custom_color_apply_button")
+            ) {
+                Text(stringResource(R.string.custom_color_apply), fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = colors.textSecondary)
+            }
+        },
+        shape = RoundedCornerShape(16.dp)
+    )
+}
+
+@Composable
+private fun ColorComponentSlider(
+    label: String,
+    valueText: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+    accent: Color,
     tag: String
 ) {
-    Column(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (selected) StudioCardSelected else Color(0xFF101824))
-            .border(
-                1.dp,
-                if (selected) NeonCyan else Color(0xFF1E293B),
-                RoundedCornerShape(8.dp)
+    val colors = PhoneMicTheme.colors
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(label, color = colors.textSecondary, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+            Text(
+                text = valueText,
+                color = colors.textPrimary,
+                fontFamily = JetBrainsMonoFontFamily,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold
             )
-            .alpha(if (enabled) 1f else 0.45f)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .testTag(tag),
-        verticalArrangement = Arrangement.spacedBy(1.dp)
-    ) {
-        Text(
-            text = title,
-            color = if (selected) NeonCyan else TextPrimary,
-            fontSize = 11.5.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-        )
-        Text(
-            text = subtitle,
-            color = TextMuted,
-            fontSize = 9.5.sp,
-            fontFamily = FontFamily.Monospace
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            colors = SliderDefaults.colors(
+                thumbColor = accent,
+                activeTrackColor = accent,
+                inactiveTrackColor = colors.nestedSurface
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(tag)
         )
     }
 }
 
 @Composable
-private fun AboutInfoRow(label: String, value: String) {
+private fun CompactAboutRow(label: String, value: String) {
+    val colors = PhoneMicTheme.colors
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -827,15 +1280,15 @@ private fun AboutInfoRow(label: String, value: String) {
     ) {
         Text(
             text = label,
-            color = TextSecondary,
+            color = colors.textSecondary,
             fontSize = 12.sp
         )
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(10.dp))
         Text(
             text = value,
-            color = TextPrimary,
+            color = colors.textPrimary,
             fontSize = 11.5.sp,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = JetBrainsMonoFontFamily,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

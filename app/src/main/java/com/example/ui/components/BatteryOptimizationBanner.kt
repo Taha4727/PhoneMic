@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -35,11 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.DeviceProfile
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.StreamWarningAmber
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.PhoneMicTheme
 
 @Composable
 fun BatteryOptimizationBanner(
@@ -48,14 +45,15 @@ fun BatteryOptimizationBanner(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val colors = PhoneMicTheme.colors
     val isPocoOrXiaomi = DeviceProfile.isXiaomiOrPoco
 
     AnimatedVisibility(visible = !isIgnored, modifier = modifier) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color(0xFF221708), RoundedCornerShape(14.dp))
-                .border(1.dp, StreamWarningAmber.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                .background(colors.statusWarning.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                .border(1.dp, colors.statusWarning.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -67,7 +65,7 @@ fun BatteryOptimizationBanner(
                 Icon(
                     imageVector = if (isPocoOrXiaomi) Icons.Default.ElectricBolt else Icons.Default.BatteryAlert,
                     contentDescription = null,
-                    tint = StreamWarningAmber,
+                    tint = colors.statusWarning,
                     modifier = Modifier.size(24.dp)
                 )
 
@@ -86,7 +84,7 @@ fun BatteryOptimizationBanner(
                         } else {
                             "Background Streaming Protection"
                         },
-                        color = TextPrimary,
+                        color = colors.textPrimary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -98,7 +96,7 @@ fun BatteryOptimizationBanner(
                         } else {
                             "Prevent Android Doze from cutting Wi-Fi audio when screen locks."
                         },
-                        color = TextSecondary,
+                        color = colors.textSecondary,
                         fontSize = 11.sp,
                         lineHeight = 14.5.sp
                     )
@@ -116,50 +114,39 @@ fun BatteryOptimizationBanner(
                         onDismissOrGranted()
                     },
                     shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.height(34.dp),
+                    modifier = Modifier.height(48.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = StreamWarningAmber,
-                        contentColor = Color(0xFF2C1900)
-                    )
+                        containerColor = colors.statusWarning,
+                        contentColor = if (colors.isDark) Color.Black else Color.White
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp, 0.dp)
                 ) {
-                    Text("Allow Doze Exemption", fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                    Text("Allow Doze Exemption", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
 
                 if (isPocoOrXiaomi) {
                     OutlinedButton(
-                        onClick = {
-                            DeviceProfile.openHyperOsSettings(context)
-                        },
+                        onClick = { DeviceProfile.openHyperOsSettings(context) },
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(34.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = NeonCyan
-                        ),
-                        border = ButtonDefaults.outlinedButtonBorder.copy(
-                            brush = androidx.compose.ui.graphics.SolidColor(NeonCyan.copy(alpha = 0.5f))
-                        )
+                        modifier = Modifier.height(48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.accent),
+                        border = BorderStroke(1.dp, colors.accent.copy(alpha = 0.6f))
                     ) {
-                        Icon(imageVector = Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(13.dp))
+                        Icon(imageVector = Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("HyperOS App Info", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                        Text("HyperOS Info", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
                 } else if (DeviceProfile.isSamsung) {
                     OutlinedButton(
-                        onClick = {
-                            DeviceProfile.openSamsungBatterySettings(context)
-                        },
+                        onClick = { DeviceProfile.openSamsungBatterySettings(context) },
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(34.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = NeonCyan
-                        ),
-                        border = ButtonDefaults.outlinedButtonBorder.copy(
-                            brush = androidx.compose.ui.graphics.SolidColor(NeonCyan.copy(alpha = 0.5f))
-                        )
+                        modifier = Modifier.height(48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.accent),
+                        border = BorderStroke(1.dp, colors.accent.copy(alpha = 0.6f))
                     ) {
-                        Icon(imageVector = Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(13.dp))
+                        Icon(imageVector = Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Device Care", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Device Care", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }

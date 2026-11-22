@@ -80,10 +80,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import com.example.R
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.StudioDarkBg
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.PhoneMicTheme
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
@@ -120,6 +117,7 @@ fun QrScannerDialog(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val colors = PhoneMicTheme.colors
     val hostActivity = remember(context) { context.findActivity() }
     val fallbackLifecycle = LocalLifecycleOwner.current
     val lifecycleOwner = hostActivity ?: fallbackLifecycle
@@ -211,29 +209,30 @@ fun QrScannerDialog(
                     Icon(
                         imageVector = Icons.Default.Warning,
                         contentDescription = null,
-                        tint = NeonCyan,
+                        tint = colors.accent,
                         modifier = Modifier.size(56.dp)
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         text = "Camera Unavailable",
-                        color = TextPrimary,
+                        color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = cameraErrorMessage ?: "Unable to access camera preview.",
-                        color = TextSecondary,
+                        color = Color.White.copy(alpha = 0.8f),
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center
                     )
                     Spacer(modifier = Modifier.height(24.dp))
                     Button(
                         onClick = onDismiss,
+                        modifier = Modifier.height(48.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = NeonCyan,
-                            contentColor = Color(0xFF003038)
+                            containerColor = colors.accent,
+                            contentColor = colors.onAccent
                         )
                     ) {
                         Text("Enter IP Manually", fontWeight = FontWeight.Bold)
@@ -374,7 +373,7 @@ fun QrScannerDialog(
                             scaleY = focusRingScale.value
                             alpha = focusRingAlpha.value
                         }
-                        .border(2.dp, NeonCyan, CircleShape)
+                        .border(2.dp, colors.accent, CircleShape)
                 )
             }
 
@@ -395,8 +394,8 @@ fun QrScannerDialog(
                     IconButton(
                         onClick = onDismiss,
                         modifier = Modifier
-                            .background(StudioDarkBg.copy(alpha = 0.7f), CircleShape)
-                            .size(44.dp)
+                            .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                            .size(48.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
@@ -412,12 +411,12 @@ fun QrScannerDialog(
                         Icon(
                             imageVector = Icons.Default.QrCodeScanner,
                             contentDescription = null,
-                            tint = NeonCyan,
+                            tint = colors.accent,
                             modifier = Modifier.size(20.dp)
                         )
                         Text(
                             text = stringResource(R.string.qr_scanner_title),
-                            color = TextPrimary,
+                            color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
                         )
@@ -435,15 +434,15 @@ fun QrScannerDialog(
                         },
                         modifier = Modifier
                             .background(
-                                if (torchEnabled) NeonCyan.copy(alpha = 0.3f) else StudioDarkBg.copy(alpha = 0.7f),
+                                if (torchEnabled) colors.accent.copy(alpha = 0.3f) else Color.Black.copy(alpha = 0.65f),
                                 CircleShape
                             )
-                            .size(44.dp)
+                            .size(48.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.FlashOn,
                             contentDescription = "Toggle flashlight",
-                            tint = if (torchEnabled) NeonCyan else Color.White
+                            tint = if (torchEnabled) colors.accent else Color.White
                         )
                     }
                 }
@@ -453,12 +452,12 @@ fun QrScannerDialog(
                     Box(
                         modifier = Modifier
                             .size(260.dp)
-                            .border(2.dp, NeonCyan.copy(alpha = 0.8f), RoundedCornerShape(16.dp))
+                            .border(2.dp, colors.accent.copy(alpha = 0.85f), RoundedCornerShape(16.dp))
                     ) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
                             val y = size.height * laserProgress
                             drawLine(
-                                color = NeonCyan,
+                                color = colors.accent,
                                 start = Offset(0f, y),
                                 end = Offset(size.width, y),
                                 strokeWidth = 3.dp.toPx()
@@ -470,12 +469,12 @@ fun QrScannerDialog(
                 // Bottom Hint Text
                 Box(
                     modifier = Modifier
-                        .background(StudioDarkBg.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
+                        .background(Color.Black.copy(alpha = 0.78f), RoundedCornerShape(12.dp))
                         .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
                     Text(
                         text = stringResource(R.string.qr_scanner_hint),
-                        color = TextSecondary,
+                        color = Color.White.copy(alpha = 0.9f),
                         fontSize = 13.sp,
                         textAlign = TextAlign.Center
                     )
