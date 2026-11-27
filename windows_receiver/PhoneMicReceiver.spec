@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for PhoneMic Windows Receiver v1.4.0
+PyInstaller spec for PhoneMic Windows Receiver v1.4.2
 
     pyinstaller --clean PhoneMicReceiver.spec                 -> dist\PhoneMicReceiver.exe        (single file, portable)
     set PM_ONEDIR=1 && pyinstaller --clean PhoneMicReceiver.spec
@@ -14,7 +14,7 @@ IS_WIN = sys.platform.startswith("win")
 ONEDIR = os.environ.get("PM_ONEDIR", "") == "1"
 ICON = os.path.join("assets", "phonemic.ico")
 
-datas, binaries = [], []
+datas, binaries = [("assets", "assets")], []
 hiddenimports = [
     "customtkinter", "sounddevice", "_sounddevice_data", "numpy", "pystray",
     "PIL", "PIL.Image", "PIL.ImageDraw",
@@ -24,7 +24,7 @@ hiddenimports = [
     "phonemic", "phonemic.const", "phonemic.wire", "phonemic.config", "phonemic.system", "phonemic.dsp", "phonemic.engine",
     "phonemic.widgets", "phonemic.ui_kit", "phonemic.gui", "phonemic.minimal_gui", "phonemic.pages", "phonemic.wizard", "phonemic.cli", "phonemic.icon",
     "phonemic.bindings", "phonemic.settings_meta", "phonemic.presets_io", "phonemic.hotkeys", "phonemic.tray", "phonemic.cues",
-    "phonemic.virtual_mic", "phonemic.selftest", "phonemic.qr", "phonemic.qrcodegen",
+    "phonemic.virtual_mic", "phonemic.selftest", "phonemic.qr", "phonemic.qrcodegen", "phonemic.cat_preview", "phonemic.cat_sound_data",
 ]
 if IS_WIN:
     hiddenimports += ["pystray._win32", "winsound", "winreg"]

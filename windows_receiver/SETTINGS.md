@@ -1,4 +1,4 @@
-# PhoneMic Receiver 1.4.0: settings reference
+# PhoneMic Receiver 1.4.2: settings reference
 
 Generated from the settings registry that drives the app, so it always matches what you see. Settings marked *advanced* only appear when **Settings view: Advanced** is turned on (bottom of the sidebar). You can also find any setting with the search box at the top of the window.
 

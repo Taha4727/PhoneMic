@@ -6,7 +6,6 @@ import com.example.audio.AudioFrameProcessor
 import com.example.audio.AudioProtocol
 import com.example.ui.screens.formatElapsedHms
 import com.example.ui.theme.AppPaletteStyle
-import com.example.ui.theme.ThemeColorPreset
 import com.example.ui.theme.formatColorHex
 import com.example.ui.theme.resolvePhoneMicColors
 import org.junit.Assert.assertEquals
@@ -25,9 +24,9 @@ class ExampleUnitTest {
   }
 
   @Test
-  fun appVersion_is140() {
-    assertEquals("1.4.0", BuildConfig.VERSION_NAME)
-    assertEquals(5, BuildConfig.VERSION_CODE)
+  fun appVersion_is142() {
+    assertEquals("1.4.2", BuildConfig.VERSION_NAME)
+    assertEquals(6, BuildConfig.VERSION_CODE)
   }
 
   @Test
@@ -55,29 +54,28 @@ class ExampleUnitTest {
     assertFalse(light.isOled)
     assertNotEquals(Color(0xFF000000), light.background)
 
-    val accents = AppPaletteStyle.entries.map {
+    val builtInPalettes = AppPaletteStyle.entries.filter { it != AppPaletteStyle.CUSTOM }
+    val accents = builtInPalettes.map {
       resolvePhoneMicColors(isDark = true, oledBlack = false, palette = it).accent
     }.toSet()
-    assertEquals(AppPaletteStyle.entries.size, accents.size)
+    assertEquals(builtInPalettes.size, accents.size)
   }
 
   @Test
-  fun resolvePhoneMicColors_supportsThemeColorPresetsAndCustomColor() {
+  fun resolvePhoneMicColors_supportsCustomPaletteColor() {
     assertEquals("#8B5CF6", formatColorHex(0xFF8B5CF6L))
 
-    val emerald = resolvePhoneMicColors(
+    val vibrant = resolvePhoneMicColors(
       isDark = true,
       oledBlack = false,
-      palette = AppPaletteStyle.TONAL_SPOT,
-      themeColorPreset = ThemeColorPreset.EMERALD
+      palette = AppPaletteStyle.VIBRANT
     )
-    assertEquals(Color(0xFF10B981), emerald.accent)
+    assertEquals(Color(0xFF22D38B), vibrant.accent)
 
     val customBright = resolvePhoneMicColors(
       isDark = true,
       oledBlack = true,
-      palette = AppPaletteStyle.NEUTRAL,
-      themeColorPreset = ThemeColorPreset.CUSTOM,
+      palette = AppPaletteStyle.CUSTOM,
       customColorArgb = 0xFFFF6600L
     )
     assertEquals(Color(0xFFFF6600), customBright.accent)

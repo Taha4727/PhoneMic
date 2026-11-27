@@ -3,8 +3,8 @@ import math
 import tkinter as tk
 
 from . import settings_meta as sm
-from .widgets import (T, HAS_CTK, ctk, dp, font, lerp_color, autowrap, bg_of,
-                      Toggle, Slider, Segmented, Combo, Card, FlatButton)
+from .widgets import (T, HAS_CTK, ctk, dp, font, lerp_color, autowrap, bg_of, screen_bounds,
+                      Toggle, Slider, Segmented, Combo, Card, FlatButton, TextInput)
 from . import hotkeys as hk
 
 
@@ -147,6 +147,8 @@ class SettingRow(tk.Frame):
             self.set_enabled(self.binder.needs_met(s))
 
     def _show_value(self, value):
+        if not self.winfo_exists():
+            return
         s = self.setting
         if self.value_label is not None:
             txt = sm.format_value(s.fmt, value)
@@ -158,9 +160,16 @@ class SettingRow(tk.Frame):
 
     def _changed(self, value):
         self.binder.set(self.setting, value, source=self._external)
-        self._show_value(self.binder.get(self.setting))
+        if not self.winfo_exists():
+            return
+        actual = self.binder.get(self.setting)
+        if self.control is not None and hasattr(self.control, "set") and self.control.get() != actual:
+            self.control.set(actual)
+        self._show_value(actual)
 
     def _external(self, value):
+        if not self.winfo_exists():
+            return
         if self.control is not None and hasattr(self.control, "set"):
             if self.control.get() != value:
                 self.control.set(value)
@@ -214,7 +223,7 @@ class SettingRow(tk.Frame):
                 self.after_cancel(self._flash)
             except Exception:
                 pass
-        self._flash = self.after(ms, lambda: self.configure(highlightthickness=0))
+        self._flash = self.after(ms, lambda: self.winfo_exists() and self.configure(highlightthickness=0))
 
 
 class _ChoiceCombo(Combo):
@@ -308,12 +317,21 @@ class PanelHeader(tk.Frame):
 
     def _user(self, value):
         self.binder.set(self.toggle_setting, value, source=self._ext)
-        self._label(bool(value))
+        if not self.winfo_exists():
+            return
+        actual = bool(self.binder.get(self.toggle_setting))
+        if self.switch is not None and self.switch.get() != actual:
+            self.switch.set(actual)
+        self._label(actual)
 
     def _label(self, on):
+        if not self.winfo_exists():
+            return
         self.state_label.configure(text="On" if on else "Off", fg=self.hi_color if on else T.DIM)
 
     def _ext(self, value):
+        if not self.winfo_exists():
+            return
         if self.switch is not None and self.switch.get() != bool(value):
             self.switch.set(bool(value))
         if self.switch is not None:
@@ -677,19 +695,25 @@ class SearchBox(_SearchBase):
         self._close_job = None
 
         self.row_wrap = tk.Frame(self, bg=T.SURFACE2)
-        self.row_wrap.pack(fill="x", padx=dp(10), pady=dp(4))
+        self.row_wrap.pack(fill="x", padx=dp(8), pady=dp(2))
         self.icon_c = tk.Canvas(self.row_wrap, width=dp(14), height=dp(14), bg=T.SURFACE2, highlightthickness=0, bd=0)
-        self.icon_c.pack(side="left", padx=(0, dp(6)))
+        self.icon_c.pack(side="left", padx=(0, dp(4)))
         self._draw_lens()
 
-        self.entry = tk.Entry(self.row_wrap, textvariable=self.var, bg=T.SURFACE2, fg=T.DIM, insertbackground=T.ACCENT_HI,
-                              relief="flat", font=font(10), width=width, highlightthickness=0, bd=0)
+        self.entry = TextInput(self.row_wrap, textvariable=self.var, width=width, size=10,
+                               show_border=False, bg=T.SURFACE2)
+        self.entry.set_text_color(T.DIM)
         self.entry.pack(side="left", fill="x", expand=True)
+
+        self.clear_lbl = tk.Label(self.row_wrap, text="\u00d7", bg=T.SURFACE2, fg=T.DIM,
+                                  font=font(11, "bold"), cursor="hand2", padx=dp(3))
+        self.clear_lbl.bind("<Button-1>", lambda _e: (self.clear(), self.focus_set()))
+
         self.entry.bind("<FocusIn>", self._focus_in)
         self.entry.bind("<FocusOut>", self._focus_out)
         self.entry.bind("<KeyRelease>", self._typed)
         self.entry.bind("<Return>", lambda e: self.pick(self.cursor if self.cursor >= 0 else 0))
-        self.entry.bind("<Escape>", lambda e: self.clear())
+        self.entry.bind("<Escape>", lambda e: (self.clear(), self.focus_set()))
         self.entry.bind("<Down>", lambda e: self._step(1))
         self.entry.bind("<Up>", lambda e: self._step(-1))
         self.bind("<Unmap>", lambda e: self.close())
@@ -700,6 +724,13 @@ class SearchBox(_SearchBase):
         self.icon_c.create_oval(dp(2), dp(2), dp(9), dp(9), outline=T.DIM, width=1.5)
         self.icon_c.create_line(dp(8), dp(8), dp(12), dp(12), fill=T.DIM, width=1.5)
 
+    def _sync_clear_btn(self):
+        if not self.showing_hint and self.var.get():
+            if self.clear_lbl.packed is None if hasattr(self.clear_lbl, "packed") else not self.clear_lbl.winfo_ismapped():
+                self.clear_lbl.pack(side="right", padx=(dp(2), 0), before=self.entry)
+        else:
+            self.clear_lbl.pack_forget()
+
     def refresh_theme(self):
         if HAS_CTK:
             self.configure(fg_color=T.SURFACE2, border_color=T.BORDER)
@@ -708,7 +739,9 @@ class SearchBox(_SearchBase):
         self.row_wrap.configure(bg=T.SURFACE2)
         self.icon_c.configure(bg=T.SURFACE2)
         self._draw_lens()
-        self.entry.configure(bg=T.SURFACE2, fg=T.DIM if self.showing_hint else T.TEXT, insertbackground=T.ACCENT_HI)
+        self.clear_lbl.configure(bg=T.SURFACE2, fg=T.MUTED)
+        self.entry.set_text_color(T.DIM if self.showing_hint else T.TEXT)
+        self.entry.refresh_theme(T.SURFACE2)
         if self.popup is not None:
             self.show()
 
@@ -727,7 +760,8 @@ class SearchBox(_SearchBase):
         if self.showing_hint:
             self.showing_hint = False
             self.var.set("")
-            self.entry.configure(fg=T.TEXT)
+            self.entry.set_text_color(T.TEXT)
+        self._sync_clear_btn()
 
     def _focus_out(self, _e=None):
         if HAS_CTK:
@@ -735,18 +769,21 @@ class SearchBox(_SearchBase):
         if not self.var.get().strip():
             self.showing_hint = True
             self.var.set(self.PLACEHOLDER)
-            self.entry.configure(fg=T.DIM)
+            self.entry.set_text_color(T.DIM)
+        self._sync_clear_btn()
         self._close_job = self.after(220, self.close)
 
     def clear(self):
         self.close()
         self.showing_hint = True
         self.var.set(self.PLACEHOLDER)
-        self.entry.configure(fg=T.DIM)
+        self.entry.set_text_color(T.DIM)
+        self._sync_clear_btn()
 
     def _typed(self, event=None):
         if event is not None and getattr(event, "keysym", "") in ("Return", "Escape", "Down", "Up", "Tab"):
             return
+        self._sync_clear_btn()
         self.hits = sm.search(self.query(), include_advanced=True)
         self.cursor = 0 if self.hits else -1
         self.show()
@@ -782,9 +819,14 @@ class SearchBox(_SearchBase):
                     self.row_widgets.append((row, title, where))
                 self._paint()
             self.popup.update_idletasks()
-            sw, sh = self.popup.winfo_screenwidth(), self.popup.winfo_screenheight()
+            vx, vy, vw, vh = screen_bounds(self.popup)
             pw = self.popup.winfo_reqwidth()
-            x = max(dp(6), min(x, sw - pw - dp(8)))
+            ph = self.popup.winfo_reqheight()
+            x = max(vx + dp(6), min(x, vx + vw - pw - dp(8)))
+            if y + ph > vy + vh - dp(8):
+                y = max(vy + dp(6), self.winfo_rooty() - ph - dp(4))
+            else:
+                y = max(vy + dp(6), y)
             self.popup.wm_geometry(f"+{x}+{y}")
         except Exception:
             self.popup = None
@@ -833,6 +875,7 @@ class SearchBox(_SearchBase):
         if 0 <= index < len(self.hits):
             s = self.hits[index]
             self.clear()
+            self.focus_set()
             self.app.goto_setting(s.key)
 
 

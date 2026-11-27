@@ -6,8 +6,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.ReadOnlyComposable
-import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -32,69 +33,71 @@ fun PhoneMicTheme(
     isDarkMode: Boolean = true,
     oledBlackEnabled: Boolean = false,
     paletteStyle: AppPaletteStyle = AppPaletteStyle.TONAL_SPOT,
-    themeColorPreset: ThemeColorPreset = ThemeColorPreset.DEFAULT,
     customThemeColorArgb: Long = 0xFF0EA5E9L,
     content: @Composable () -> Unit
 ) {
-    val colors = resolvePhoneMicColors(
-        isDark = isDarkMode,
-        oledBlack = oledBlackEnabled,
-        palette = paletteStyle,
-        themeColorPreset = themeColorPreset,
-        customColorArgb = customThemeColorArgb
-    )
+    val colors = remember(isDarkMode, oledBlackEnabled, paletteStyle, customThemeColorArgb) {
+        resolvePhoneMicColors(
+            isDark = isDarkMode,
+            oledBlack = oledBlackEnabled,
+            palette = paletteStyle,
+            customColorArgb = customThemeColorArgb
+        )
+    }
 
-    val m3Scheme = if (isDarkMode) {
-        darkColorScheme(
-            primary = colors.accent,
-            onPrimary = colors.onAccent,
-            primaryContainer = colors.accentSoftBg,
-            onPrimaryContainer = colors.accent,
-            secondary = colors.secondaryAccent,
-            onSecondary = colors.onAccent,
-            secondaryContainer = colors.nestedSurface,
-            onSecondaryContainer = colors.textPrimary,
-            background = colors.background,
-            onBackground = colors.textPrimary,
-            surface = colors.cardSurface,
-            onSurface = colors.textPrimary,
-            surfaceContainer = colors.cardSurface,
-            surfaceContainerHigh = colors.nestedSurface,
-            surfaceContainerLow = colors.bottomBarSurface,
-            surfaceVariant = colors.nestedSurface,
-            onSurfaceVariant = colors.textSecondary,
-            outline = colors.border,
-            outlineVariant = colors.border,
-            error = colors.statusError
-        )
-    } else {
-        lightColorScheme(
-            primary = colors.accent,
-            onPrimary = colors.onAccent,
-            primaryContainer = colors.accentSoftBg,
-            onPrimaryContainer = colors.accent,
-            secondary = colors.secondaryAccent,
-            onSecondary = colors.onAccent,
-            secondaryContainer = colors.nestedSurface,
-            onSecondaryContainer = colors.textPrimary,
-            background = colors.background,
-            onBackground = colors.textPrimary,
-            surface = colors.cardSurface,
-            onSurface = colors.textPrimary,
-            surfaceContainer = colors.cardSurface,
-            surfaceContainerHigh = colors.nestedSurface,
-            surfaceContainerLow = colors.bottomBarSurface,
-            surfaceVariant = colors.nestedSurface,
-            onSurfaceVariant = colors.textSecondary,
-            outline = colors.border,
-            outlineVariant = colors.border,
-            error = colors.statusError
-        )
+    val m3Scheme = remember(colors) {
+        if (colors.isDark) {
+            darkColorScheme(
+                primary = colors.accent,
+                onPrimary = colors.onAccent,
+                primaryContainer = colors.accentSoftBg,
+                onPrimaryContainer = colors.accent,
+                secondary = colors.secondaryAccent,
+                onSecondary = colors.onAccent,
+                secondaryContainer = colors.nestedSurface,
+                onSecondaryContainer = colors.textPrimary,
+                background = colors.background,
+                onBackground = colors.textPrimary,
+                surface = colors.cardSurface,
+                onSurface = colors.textPrimary,
+                surfaceContainer = colors.cardSurface,
+                surfaceContainerHigh = colors.nestedSurface,
+                surfaceContainerLow = colors.bottomBarSurface,
+                surfaceVariant = colors.nestedSurface,
+                onSurfaceVariant = colors.textSecondary,
+                outline = colors.border,
+                outlineVariant = colors.border,
+                error = colors.statusError
+            )
+        } else {
+            lightColorScheme(
+                primary = colors.accent,
+                onPrimary = colors.onAccent,
+                primaryContainer = colors.accentSoftBg,
+                onPrimaryContainer = colors.accent,
+                secondary = colors.secondaryAccent,
+                onSecondary = colors.onAccent,
+                secondaryContainer = colors.nestedSurface,
+                onSecondaryContainer = colors.textPrimary,
+                background = colors.background,
+                onBackground = colors.textPrimary,
+                surface = colors.cardSurface,
+                onSurface = colors.textPrimary,
+                surfaceContainer = colors.cardSurface,
+                surfaceContainerHigh = colors.nestedSurface,
+                surfaceContainerLow = colors.bottomBarSurface,
+                surfaceVariant = colors.nestedSurface,
+                onSurfaceVariant = colors.textSecondary,
+                outline = colors.border,
+                outlineVariant = colors.border,
+                error = colors.statusError
+            )
+        }
     }
 
     val view = LocalView.current
     if (!view.isInEditMode) {
-        SideEffect {
+        LaunchedEffect(view, isDarkMode) {
             val window = (view.context as? Activity)?.window
             if (window != null) {
                 WindowCompat.getInsetsController(window, view).apply {

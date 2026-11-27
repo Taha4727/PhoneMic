@@ -268,6 +268,19 @@ assert sp.card_general is not None
 sp._pick_tab("shortcuts"); assert sp.card_keys is not None and "shortcuts" in sp.tabs
 sp._pick_tab("recording"); assert sp.card_rec is not None and "recording" in sp.tabs
 sp._pick_tab("general")
+
+# Toggle controls reflect True/False accurately and dependent Segmented choice rows disable cleanly
+app.show_page("sound"); snd = app.pages["sound"]; snd.pick_stage("filters")
+app.binder.set(sm.BY_KEY["lowcut_enabled"], True)
+assert snd.panels["filters"]["header"].switch.get() is True
+slope_row = next(r for r in snd.panels["filters"]["rows"] if r.setting.key == "lowcut_slope")
+assert slope_row.enabled is True and slope_row.control._enabled is True
+snd.panels["filters"]["header"].switch._click()
+assert app.proc.lowcut_enabled is False and snd.panels["filters"]["header"].switch.get() is False
+assert slope_row.enabled is False and slope_row.control._enabled is False
+app.binder.set(sm.BY_KEY["lowcut_enabled"], True)
+assert slope_row.enabled is True and slope_row.control._enabled is True
+
 cfg.data["app"]["first_run_done"] = False
 app.show_page("wizard"); wz = app.pages["wizard"]; wz.on_show(); assert wz.step == 0
 wz._fit_card(640); assert wz.body._colcfg[0]["minsize"] == 0
@@ -276,10 +289,17 @@ for expect in (1, 2, 3, 4):
 wz.choose("speakers"); wz.go(1); wz.choose("mic"); wz.back(); assert wz.step == 0
 wz.go(4); wz.next()
 assert cfg.data["app"]["first_run_done"] is True and app.current == "dashboard"
+app.root.state("zoomed")
 app.toggle_ui_mode(); assert app.ui_mode == "minimal" and app.minimal_view is not None
+assert app.root.state() == "normal", "switching to Compact mode must unmaximize zoomed window"
 tick(2); app.minimal_view._step_gain(1.5); assert abs(p.out_gain_db - 1.5) < 1e-6
 app.minimal_view._set_gain(0.0)
+# Secondary monitor negative X geometry restores without being clamped away
+app.root.winfo_vrootx = lambda: -1920
+app.root.winfo_vrootwidth = lambda: 3840
+cfg.data["app"]["window_geometry"] = "1000x700+-900+90"
 app.toggle_ui_mode(); assert app.ui_mode == "default"
+assert app.root._geo == "1000x700+-900+90", app.root._geo
 print("   PASS")
 
 print("13. live theme rebuild, monochrome/soft modes, and binder scope cleanup")

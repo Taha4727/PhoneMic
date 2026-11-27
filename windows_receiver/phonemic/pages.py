@@ -15,7 +15,8 @@ import numpy as np
 from . import system, virtual_mic, settings_meta as sm
 from .const import VERSION, VB_CABLE_URL, CABLE_HINT
 from .widgets import (T, HAS_CTK, ctk, dp, font, MONO_FONT, autowrap, bg_of, lerp_color,
-                      FlatButton, Segmented, Combo, Card, StatTile)
+                      FlatButton, Segmented, Combo, Card, StatTile, Toggle, CatPreviewButton,
+                      TextInput, SurfaceBox, PillBadge, ScrollTextBox)
 from .ui_kit import SettingRow, SettingsCard, PanelHeader, StageList, EQEditor, HotkeyEntry
 from .gui import Page, fmt_time
 from .qr import generate_qr_matrix
@@ -223,8 +224,19 @@ class SoundPage(Page):
         button_row(p_row, [("Save...", self._voice_save, "blue"), ("Delete", self._voice_delete, "danger")]
                    ).pack(side="left")
 
-        label(body, "Character morph", T.BLUE_HI, 9, "bold", bg=T.SURFACE, anchor="w").pack(
-            fill="x", before=foot, pady=(dp(4), dp(6)))
+        cat_bar = tk.Frame(body, bg=T.SURFACE)
+        cat_btn = CatPreviewButton(cat_bar, command=app.preview_cat_voice, menu_command=app.show_cat_menu, size=17)
+        cat_btn.pack(side="left")
+        FlatButton(cat_bar, "Preview", app.preview_cat_voice, style="blue", size=8, padx=8, pady=3).pack(
+            side="left", padx=(dp(6), dp(4)))
+        FlatButton(cat_bar, "Upload WAV...", app.upload_cat_wav, style="normal", size=8, padx=8, pady=3).pack(
+            side="left", padx=(0, dp(4)))
+        cat_reset_btn = FlatButton(cat_bar, "Reset", app.reset_cat_wav, style="ghost", size=8, padx=8, pady=3)
+        cat_lbl = tk.Label(cat_bar, text="", bg=T.SURFACE, fg=T.DIM, font=font(8), anchor="w")
+        cat_lbl.pack(side="left", fill="x", expand=True, padx=(dp(6), 0))
+
+        morph_lbl = label(body, "Character morph", T.BLUE_HI, 9, "bold", bg=T.SURFACE, anchor="w")
+        morph_lbl.pack(fill="x", before=foot, pady=(dp(4), dp(6)))
         grid = tk.Frame(body, bg=T.SURFACE)
         grid.pack(fill="x", before=foot)
         mode_buttons = {}
@@ -252,6 +264,11 @@ class SoundPage(Page):
             "desc": desc,
             "latency": lat,
             "rows": [pitch_row, formant_row, mix_row],
+            "anchor": morph_lbl,
+            "cat_bar": cat_bar,
+            "cat_btn": cat_btn,
+            "cat_reset": cat_reset_btn,
+            "cat_lbl": cat_lbl,
         }
         self.sync_voice()
 
@@ -293,6 +310,27 @@ class SoundPage(Page):
             del app.cfg.data["user_voice_presets"][name]
             app.apply_voice_preset("Normal (Bypass)")
 
+    def sync_cat_preview(self):
+        vw = self.voice_widgets
+        if not vw or "cat_bar" not in vw:
+            return
+        bar = vw["cat_bar"]
+        if self.app.cat_preview_visible():
+            if bar.winfo_manager() != "pack":
+                bar.pack(fill="x", before=vw["anchor"], pady=(0, dp(10)))
+            lbl, is_custom = self.app.rx.cat_preview_info()
+            vw["cat_lbl"].configure(text=lbl)
+            vw["cat_btn"].set_playing(self.app.rx.preview_active)
+            rst = vw["cat_reset"]
+            if is_custom:
+                if rst.winfo_manager() != "pack":
+                    rst.pack(side="left", before=vw["cat_lbl"], padx=(0, dp(4)))
+            else:
+                rst.pack_forget()
+        else:
+            vw["cat_btn"].set_playing(False)
+            bar.pack_forget()
+
     def sync_voice(self):
         vw = self.voice_widgets
         if not vw:
@@ -307,6 +345,7 @@ class SoundPage(Page):
         ms = vc.latency_ms
         vw["latency"].configure(text=(f"Adds ~{ms:.0f} ms of pitch-shifting latency." if ms else "Zero added latency.")
                                 + ("" if vc.enabled else " (Voice changer is currently off)"))
+        self.sync_cat_preview()
 
     def build_eq(self, panel, settings):
         app, body = self.app, panel["body"]
@@ -542,7 +581,7 @@ class ConnectPage(Page):
                                             anchor="w", justify="left", wraplength=dp(260)))
         self.out_status.pack(fill="x", pady=(dp(4), 0))
 
-        cable = tk.Frame(self.card_out.footer, bg=T.SIDEBAR, highlightthickness=1, highlightbackground=T.BORDER)
+        cable = SurfaceBox(self.card_out.footer, bg=T.SIDEBAR, border=T.BORDER, corner=8)
         cable.pack(fill="x", pady=(dp(10), 0))
         cable_in = tk.Frame(cable, bg=T.SIDEBAR)
         cable_in.pack(fill="x", padx=dp(10), pady=dp(8))
@@ -583,7 +622,7 @@ class ConnectPage(Page):
 
         qr_row = tk.Frame(c_net.body, bg=T.SURFACE)
         qr_row.pack(fill="x", pady=(0, dp(10)))
-        qr_box = tk.Frame(qr_row, bg=T.BG, highlightthickness=1, highlightbackground=T.BORDER_HI)
+        qr_box = SurfaceBox(qr_row, bg="#ffffff", border=T.BORDER_HI, corner=10)
         qr_box.pack(side="left")
         self.qr_canvas = tk.Canvas(qr_box, width=dp(146), height=dp(146), bg="#ffffff", highlightthickness=0)
         self.qr_canvas.pack(padx=dp(5), pady=dp(5))
@@ -604,10 +643,8 @@ class ConnectPage(Page):
         def port_control(row):
             box = tk.Frame(row, bg=T.SURFACE)
             self.port_var = tk.StringVar(value=str(app.cfg.data["network"]["port"]))
-            e = tk.Entry(box, textvariable=self.port_var, width=8, bg=T.SURFACE2, fg=T.TEXT, insertbackground=T.ACCENT_HI,
-                         relief="flat", font=font(11, "bold", True), justify="center",
-                         highlightthickness=1, highlightbackground=T.BORDER, highlightcolor=T.ACCENT)
-            e.pack(side="left", ipady=dp(4))
+            e = TextInput(box, textvariable=self.port_var, width=8, size=11, weight="bold", display=True, justify="center")
+            e.pack(side="left", ipady=0 if HAS_CTK else dp(4))
             e.bind("<Return>", lambda ev: self._apply_port())
             FlatButton(box, "Apply", self._apply_port, style="primary", size=9, padx=10, pady=4).pack(side="left", padx=(dp(8), 0))
             return box
@@ -790,16 +827,16 @@ class ConnectPage(Page):
         if not ifaces:
             label(self.addr_box, "No network adapters found.", T.WARN, 10, bg=T.SURFACE).pack(anchor="w")
         for i in ifaces:
-            r = tk.Frame(self.addr_box, bg=T.SURFACE2, highlightthickness=1, highlightbackground=T.BORDER)
+            r = SurfaceBox(self.addr_box, bg=T.SURFACE2, border=T.BORDER, corner=8)
             r.pack(fill="x", pady=dp(3))
             badge_col = self._badge_color(i.category)
-            tk.Label(r, text=f" {i.category} ", bg=T.SIDEBAR, fg=badge_col, font=font(8, "bold"), width=11).pack(
-                side="left", padx=(dp(6), 0), pady=dp(5))
+            PillBadge(r, i.category, fg=badge_col, bg=T.SIDEBAR, border=lerp_color(T.BORDER, badge_col, 0.35),
+                      size=8, padx=8, pady=2, corner=6, width=10).pack(side="left", padx=(dp(8), 0), pady=dp(5))
             ip = tk.Label(r, text=i.ip, bg=T.SURFACE2, fg=T.TEXT, font=font(12, "bold", True), cursor="hand2")
             ip.pack(side="left", padx=dp(10))
             ip.bind("<Button-1>", lambda e, a=i.ip: self.app.copy(a, "Copied IP"))
             FlatButton(r, "Copy", lambda a=i.ip: self.app.copy(a, "Copied IP"), size=8, padx=8, pady=2, corner=6).pack(
-                side="right", padx=dp(6), pady=dp(4))
+                side="right", padx=dp(8), pady=dp(4))
 
         best_ip = next((i.ip for i in ifaces if i.category in ("Wi-Fi", "USB Tether", "Ethernet")),
                        ifaces[0].ip if ifaces else "192.168.1.100")
@@ -890,6 +927,7 @@ class ConnectPage(Page):
         if s.key == "monitor_volume":
             self.vol_row.set_details(True)
             self.vol_row.flash()
+            self.scroll.scroll_to(self.vol_row)
 
 
 # Backwards compatibility aliases for external imports/tests if any
@@ -934,6 +972,16 @@ class SettingsPage(Page):
         self.card_general = SettingsCard(g_left, app, "General", "Startup, system tray, and window behaviour.",
                                          sm.by_group("settings", "general"))
         self.card_general.pack(fill="x", pady=(0, gap))
+        self.cat_row = tk.Frame(self.card_general.footer, bg=T.SURFACE)
+        self.cat_row.pack(fill="x", pady=(dp(2), 0))
+        tk.Label(self.cat_row, text="cat", bg=T.SURFACE, fg=T.TEXT, font=font(10), anchor="w").pack(side="left")
+        self.cat_toggle = Toggle(
+            self.cat_row,
+            value=app.cat_preview_visible(),
+            command=app.set_cat_preview_visible,
+            bg=T.SURFACE,
+        )
+        self.cat_toggle.pack(side="right")
         self.card_look = SettingsCard(g_right, app, "Appearance", "Refresh rate and highlight theme.",
                                       sm.by_group("settings", "appearance"))
         self.card_look.pack(fill="x", pady=(0, gap))
@@ -1038,9 +1086,14 @@ class SettingsPage(Page):
         else:
             self.keys_note.configure(text="Shortcuts pass through to games cleanly. Mouse side buttons work great for Push-to-Talk.")
 
+    def sync_cat_toggle(self):
+        if hasattr(self, "cat_toggle"):
+            self.cat_toggle.set(self.app.cat_preview_visible(), notify=False)
+
     def on_show(self):
         a = self.app
         self._sync_keys_note()
+        self.sync_cat_toggle()
         row = self.card_general.row_for("app.tray_icon")
         if row is not None and not a.tray.available:
             row.title_label.configure(text="Tray icon (needs the pystray package)")
@@ -1160,10 +1213,9 @@ class LogPage(Page):
         c.pack(fill="x", pady=(0, gap))
         hint(c.body, "Checks shortcuts, tray icon, firewall rules, virtual microphone, and audio backend availability.").pack(fill="x", pady=(0, dp(10)))
         button_row(c.body, [("Run self-test", self._selftest, "primary"), ("Copy result", self._copy_selftest, "normal")]).pack(anchor="w")
-        self.selftest_text = tk.Text(c.body, height=9, bg=T.SIDEBAR, fg=T.TEXT, relief="flat",
-                                     font=(MONO_FONT, 9),
-                                     wrap="none", highlightthickness=1, highlightbackground=T.BORDER, padx=dp(10), pady=dp(8))
-        self.selftest_text.pack(fill="x", pady=(dp(10), 0))
+        self.selftest_box = ScrollTextBox(c.body, height=9, text_font=(MONO_FONT, 9), bg=T.SIDEBAR, wrap="none")
+        self.selftest_box.pack(fill="x", pady=(dp(10), 0))
+        self.selftest_text = self.selftest_box.textbox
         self.selftest_text.configure(state="disabled")
         self.selftest_result = ""
 
@@ -1171,10 +1223,9 @@ class LogPage(Page):
         c.pack(fill="both", expand=True, pady=(0, gap))
         button_row(c.body, [("Copy diagnostics", self._copy, "primary"), ("Save diagnostics...", self._save, "normal"),
                             ("Open crash log", self._crash, "ghost")]).pack(anchor="w", pady=(0, dp(10)))
-        self.text = tk.Text(c.body, height=14, bg=T.SIDEBAR, fg=T.TEXT, relief="flat",
-                            font=(MONO_FONT, 9),
-                            wrap="none", highlightthickness=1, highlightbackground=T.BORDER, padx=dp(10), pady=dp(8))
-        self.text.pack(fill="both", expand=True)
+        self.log_box = ScrollTextBox(c.body, height=14, text_font=(MONO_FONT, 9), bg=T.SIDEBAR, wrap="none")
+        self.log_box.pack(fill="both", expand=True)
+        self.text = self.log_box.textbox
         self.text.tag_configure("warn", foreground=T.WARN)
         self.text.tag_configure("error", foreground=T.BAD)
         self.text.tag_configure("info", foreground=T.MUTED)

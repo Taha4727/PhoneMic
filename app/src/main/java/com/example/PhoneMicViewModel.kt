@@ -17,6 +17,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import androidx.compose.runtime.Immutable
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import com.example.audio.AudioFormatOption
@@ -25,7 +26,6 @@ import com.example.audio.InputMicDevice
 import com.example.audio.VisualizerSnapshot
 import com.example.audio.VisualizerStyle
 import com.example.ui.theme.AppPaletteStyle
-import com.example.ui.theme.ThemeColorPreset
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,6 +39,29 @@ enum class MainTab {
     SETTINGS
 }
 
+enum class HorizontalNavMode(
+    val id: String,
+    val label: String,
+    val description: String
+) {
+    BOTTOM_BAR(
+        id = "BOTTOM_BAR",
+        label = "Bottom Bar (Default)",
+        description = "Keep navigation tabs docked along the bottom edge in horizontal mode"
+    ),
+    SIDE_RAIL(
+        id = "SIDE_RAIL",
+        label = "Side Rail",
+        description = "Move tabs to the left edge in horizontal mode to maximize screen height"
+    );
+
+    companion object {
+        fun fromId(id: String?): HorizontalNavMode =
+            entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: BOTTOM_BAR
+    }
+}
+
+@Immutable
 data class PhoneMicUiState(
     val ip: String = "192.168.1.100",
     val wifiIp: String = "192.168.1.100",
@@ -92,8 +115,8 @@ data class PhoneMicUiState(
     val isDarkMode: Boolean = true,
     val oledBlackEnabled: Boolean = false,
     val paletteStyle: AppPaletteStyle = AppPaletteStyle.TONAL_SPOT,
-    val themeColorPreset: ThemeColorPreset = ThemeColorPreset.DEFAULT,
     val customThemeColorArgb: Long = 0xFF0EA5E9L,
+    val horizontalNavMode: HorizontalNavMode = HorizontalNavMode.BOTTOM_BAR,
     // Stream telemetry matched with PC Receiver
     val packetsSent: Long = 0L,
     val packetsDropped: Long = 0L,
@@ -130,8 +153,8 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         private const val PREF_DARK_MODE = "dark_mode_enabled"
         private const val PREF_OLED_BLACK = "oled_black_enabled"
         private const val PREF_PALETTE_STYLE = "palette_style"
-        private const val PREF_THEME_COLOR_PRESET = "theme_color_preset"
         private const val PREF_CUSTOM_THEME_COLOR = "custom_theme_color_argb"
+        private const val PREF_HORIZONTAL_NAV_MODE = "horizontal_nav_mode"
 
         private val IPV4_PATTERN = Pattern.compile(
             "^((25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\.){3}(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)$"
@@ -257,9 +280,17 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         val savedVizStyle = VisualizerStyle.fromId(prefs.getString(PREF_VISUALIZER_STYLE, VisualizerStyle.WAVEFORM.id))
         val savedDarkMode = prefs.getBoolean(PREF_DARK_MODE, true)
         val savedOledBlack = prefs.getBoolean(PREF_OLED_BLACK, false)
-        val savedPalette = AppPaletteStyle.fromId(prefs.getString(PREF_PALETTE_STYLE, AppPaletteStyle.TONAL_SPOT.id))
-        val savedThemeColorPreset = ThemeColorPreset.fromId(prefs.getString(PREF_THEME_COLOR_PRESET, ThemeColorPreset.DEFAULT.id))
+        val rawPalette = AppPaletteStyle.fromId(prefs.getString(PREF_PALETTE_STYLE, AppPaletteStyle.TONAL_SPOT.id))
+        val legacyPresetId = prefs.getString("theme_color_preset", null)
+        val savedPalette = if (rawPalette != AppPaletteStyle.CUSTOM && legacyPresetId.equals("CUSTOM", ignoreCase = true)) {
+            AppPaletteStyle.CUSTOM
+        } else {
+            rawPalette
+        }
         val savedCustomColorArgb = prefs.getLong(PREF_CUSTOM_THEME_COLOR, 0xFF0EA5E9L)
+        val savedHorizontalNavMode = HorizontalNavMode.fromId(
+            prefs.getString(PREF_HORIZONTAL_NAV_MODE, HorizontalNavMode.BOTTOM_BAR.id)
+        )
 
         val app = getApplication<Application>()
         val hasMic = ContextCompat.checkSelfPermission(
@@ -301,8 +332,8 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             isDarkMode = savedDarkMode,
             oledBlackEnabled = savedOledBlack,
             paletteStyle = savedPalette,
-            themeColorPreset = savedThemeColorPreset,
             customThemeColorArgb = savedCustomColorArgb,
+            horizontalNavMode = savedHorizontalNavMode,
             keepScreenAwake = savedKeepScreenAwake,
             isOverlayEnabled = savedOverlay,
             hasMicPermission = hasMic,
@@ -332,38 +363,54 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshAvailableMics() {
         val list = AudioProtocol.queryInputMicDevices(getApplication())
+        var prefMicChanged = false
         _uiState.update { current ->
             val stillExists = current.preferredMicId == -1 || list.any { it.id == current.preferredMicId }
+            val nextMicId = if (stillExists) current.preferredMicId else -1
+            if (nextMicId != current.preferredMicId) {
+                prefMicChanged = true
+            }
+            if (current.availableMics == list && !prefMicChanged) return@update current
             current.copy(
                 availableMics = list,
-                preferredMicId = if (stillExists) current.preferredMicId else -1
+                preferredMicId = nextMicId
             )
         }
-        savePreferences()
+        if (prefMicChanged) {
+            prefs.edit().putInt(PREF_PREFERRED_MIC_ID, _uiState.value.preferredMicId).apply()
+        }
     }
 
     fun checkBatteryOptimization() {
         val pm = getApplication<Application>().getSystemService(PowerManager::class.java)
         val pkg = getApplication<Application>().packageName
         val isIgnored = pm?.isIgnoringBatteryOptimizations(pkg) ?: true
-        _uiState.update { it.copy(isIgnoringBatteryOptimizations = isIgnored) }
+        if (_uiState.value.isIgnoringBatteryOptimizations != isIgnored) {
+            _uiState.update { it.copy(isIgnoringBatteryOptimizations = isIgnored) }
+        }
     }
 
     fun setIp(newIp: String) {
         val cleanIp = newIp.trim()
+        var isUsb = false
         _uiState.update { current ->
-            if (current.connectionMode == PhoneMicService.CONNECTION_USB) {
+            isUsb = current.connectionMode == PhoneMicService.CONNECTION_USB
+            if (isUsb) {
                 current.copy(ip = cleanIp, usbIp = cleanIp, scanFeedback = null)
             } else {
                 current.copy(ip = cleanIp, wifiIp = cleanIp, scanFeedback = null)
             }
         }
-        savePreferences()
+        prefs.edit()
+            .putString(PREF_IP, cleanIp)
+            .putString(if (isUsb) PREF_USB_IP else PREF_WIFI_IP, cleanIp)
+            .apply()
     }
 
     fun setPort(newPort: String) {
-        _uiState.update { it.copy(port = newPort.trim()) }
-        savePreferences()
+        val cleanPort = newPort.trim()
+        _uiState.update { it.copy(port = cleanPort) }
+        prefs.edit().putString(PREF_PORT, cleanPort).apply()
     }
 
     fun setConnectionMode(mode: String) {
@@ -429,9 +476,10 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setGain(newGain: Float) {
+        if (_uiState.value.gain == newGain) return
         _uiState.update { it.copy(gain = newGain) }
         phoneMicService?.setGain(newGain)
-        savePreferences()
+        prefs.edit().putFloat(PREF_GAIN, newGain).apply()
     }
 
     fun setKeepScreenAwake(awake: Boolean) {
@@ -480,9 +528,7 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setActiveTab(tab: MainTab) {
-        if (tab == MainTab.SETTINGS) {
-            refreshAvailableMics()
-        }
+        if (_uiState.value.activeTab == tab) return
         _uiState.update {
             it.copy(
                 activeTab = tab,
@@ -515,19 +561,19 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
         savePreferences()
     }
 
-    fun setThemeColorPreset(preset: ThemeColorPreset) {
-        _uiState.update { it.copy(themeColorPreset = preset) }
-        savePreferences()
-    }
-
     fun setCustomThemeColor(argb: Long) {
         val opaqueArgb = argb or 0xFF000000L
         _uiState.update {
             it.copy(
-                themeColorPreset = ThemeColorPreset.CUSTOM,
+                paletteStyle = AppPaletteStyle.CUSTOM,
                 customThemeColorArgb = opaqueArgb
             )
         }
+        savePreferences()
+    }
+
+    fun setHorizontalNavMode(mode: HorizontalNavMode) {
+        _uiState.update { it.copy(horizontalNavMode = mode) }
         savePreferences()
     }
 
@@ -801,8 +847,8 @@ class PhoneMicViewModel(application: Application) : AndroidViewModel(application
             .putBoolean(PREF_DARK_MODE, state.isDarkMode)
             .putBoolean(PREF_OLED_BLACK, state.oledBlackEnabled)
             .putString(PREF_PALETTE_STYLE, state.paletteStyle.id)
-            .putString(PREF_THEME_COLOR_PRESET, state.themeColorPreset.id)
             .putLong(PREF_CUSTOM_THEME_COLOR, state.customThemeColorArgb)
+            .putString(PREF_HORIZONTAL_NAV_MODE, state.horizontalNavMode.id)
             .putBoolean(PREF_KEEP_SCREEN_AWAKE, state.keepScreenAwake)
             .putBoolean(PREF_OVERLAY, state.isOverlayEnabled)
             .apply()

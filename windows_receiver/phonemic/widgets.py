@@ -143,20 +143,49 @@ def create_root():
     if HAS_CTK:
         ctk.set_appearance_mode("dark")
         try:
-            root = ctk.CTk(fg_color=T.BG, className="PhoneMicReceiver")
-        except TypeError:
-            root = ctk.CTk(fg_color=T.BG)
-        try:
-            # Keep scaling unified through PhoneMic's dp() helper so raw tk.Canvas and CTk widgets match 1:1 on Win 10/11
+            # Lock CustomTkinter's internal scaling before CTk() initializes Windows DPI tracking
+            # so PhoneMic's dp() helper scales raw tk.Canvas and CTk widgets 1:1 without double-scaling.
+            if hasattr(ctk, "deactivate_automatic_dpi_awareness"):
+                ctk.deactivate_automatic_dpi_awareness()
             ctk.set_widget_scaling(1.0)
             ctk.set_window_scaling(1.0)
         except Exception:
             pass
+        try:
+            root = ctk.CTk(fg_color=T.BG, className="PhoneMicReceiver")
+        except TypeError:
+            root = ctk.CTk(fg_color=T.BG)
         return root
     try:
         return tk.Tk(className="PhoneMicReceiver")
     except TypeError:
         return tk.Tk()
+
+
+def screen_bounds(widget):
+    """Return virtual desktop bounds (vx, vy, vw, vh), supporting multi-monitor setups."""
+    if IS_WIN:
+        try:
+            import ctypes
+            sm_fn = ctypes.windll.user32.GetSystemMetrics
+            vx, vy = int(sm_fn(76)), int(sm_fn(77))
+            vw, vh = int(sm_fn(78)), int(sm_fn(79))
+            if vw > 0 and vh > 0:
+                return (vx, vy, vw, vh)
+        except Exception:
+            pass
+    try:
+        sw, sh = int(widget.winfo_screenwidth()), int(widget.winfo_screenheight())
+    except Exception:
+        return (0, 0, 1920, 1080)
+    try:
+        vx, vy = int(widget.winfo_vrootx()), int(widget.winfo_vrooty())
+        vw, vh = int(widget.winfo_vrootwidth()), int(widget.winfo_vrootheight())
+        if vw >= sw and vh >= sh:
+            return (vx, vy, vw, vh)
+    except Exception:
+        pass
+    return (0, 0, sw, sh)
 
 
 def create_toplevel(parent, fg_color=None):
@@ -375,7 +404,8 @@ class FlatButton(_ButtonBase):
         bg, hover, fg = self.STYLES[style]
         border_col = self.BORDERS.get(style, T.BORDER)
         if HAS_CTK:
-            h_px = dp(max(24, int(size * 1.9 + pady * 1.6)))
+            lines = max(1, str(text).count("\n") + 1)
+            h_px = dp(max(24, int(size * 1.9 * lines + pady * 1.6)))
             min_w = dp(max(24, int(padx * 2))) if padx else 0
             bw = 0 if style == "primary" else 1
             super().__init__(
@@ -457,137 +487,132 @@ class FlatButton(_ButtonBase):
         bg, hover, fg = self._colors()
         if HAS_CTK:
             self.configure(state="normal" if enabled else "disabled",
-                           fg_color=bg, hover_color=hover, text_color=fg if enabled else T.DIM,
-                           cursor="hand2" if enabled else "arrow")
+                           fg_color=bg, hover_color=hover, text_color=fg if enabled else T.DIM)
+            try:
+                self.configure(cursor="hand2" if enabled else "arrow")
+            except Exception:
+                pass
         else:
             self.configure(bg=bg, fg=fg if enabled else T.DIM, cursor="hand2" if enabled else "arrow")
 
 
-_ToggleBase = ctk.CTkSwitch if HAS_CTK else tk.Canvas
+_ToggleBase = tk.Canvas
 
 
 class Toggle(_ToggleBase):
-    """Pill switch. set() never fires the command; user clicks do."""
+    """Canvas pill switch (consistent across Windows & Linux). set() never fires command; user clicks do."""
 
     def __init__(self, master, value=False, command=None, bg=None):
         self.value = bool(value)
         self.command = command
         self._enabled = True
-        self._suppress = False
-        host_bg = bg or bg_of(master)
-        if HAS_CTK:
-            super().__init__(
-                master,
-                text="",
-                width=dp(44),
-                height=dp(24),
-                switch_width=dp(40),
-                switch_height=dp(22),
-                corner_radius=dp(11),
-                fg_color=T.SURFACE3,
-                progress_color=T.ACCENT,
-                button_color=T.TEXT,
-                button_hover_color="#FFFFFF",
-                bg_color=host_bg,
-                command=self._ctk_changed,
-                cursor="hand2",
-            )
-            if self.value:
-                self._suppress = True
-                super().select()
-                self._suppress = False
-        else:
-            self.w, self.h = dp(40), dp(22)
-            super().__init__(master, width=self.w, height=self.h, bg=host_bg, highlightthickness=0, bd=0,
-                             cursor="hand2")
-            self.bind("<Button-1>", self._click)
-            self._draw_fallback()
+        self._hovering = False
+        self._bg = bg or bg_of(master)
+        self._paint_key = None
+        self.w, self.h = dp(44), dp(24)
+        super().__init__(master, width=self.w, height=self.h, bg=self._bg, highlightthickness=0, bd=0,
+                         cursor="hand2", takefocus=1)
+        self.bind("<Configure>", lambda _e: self._paint())
+        self.bind("<Enter>", lambda _e: self._set_hover(True))
+        self.bind("<Leave>", lambda _e: self._set_hover(False))
+        self.bind("<Button-1>", self._click)
+        self.bind("<space>", self._click)
+        self.bind("<Return>", self._click)
+        self._paint()
 
-    def _ctk_changed(self):
-        if self._suppress or not self._enabled:
+    def _set_hover(self, flag):
+        flag = bool(flag)
+        if flag == self._hovering:
             return
-        self.value = bool(super().get())
-        if self.command:
-            self.command(self.value)
+        self._hovering = flag
+        self._paint()
 
-    def _draw_fallback(self):
-        if HAS_CTK:
-            return
-        self.delete("all")
+    def _paint(self):
         w, h = self.w, self.h
         on = self.value
-        track = T.ACCENT if on else T.SURFACE3
+        key = (w, h, on, self._enabled, self._hovering, self._bg,
+               T.ACCENT, T.ACCENT_HI, T.SURFACE2, T.SURFACE3, T.BORDER, T.BORDER_HI, T.TEXT, T.DIM)
+        if key == self._paint_key:
+            return
+        self._paint_key = key
+        self.delete("all")
+
+        pad = dp(1)
+        x0, y0, x1, y1 = pad, pad, w - pad, h - pad
+        d = max(4, y1 - y0)
+        r = d / 2.0
+
         if not self._enabled:
             track = T.SURFACE2
-        r = h / 2
-        self.create_line(r, h / 2, w - r, h / 2, width=h - 2, capstyle="round", fill=track)
-        kx = w - r if on else r
-        kr = r - dp(3)
-        self.create_oval(kx - kr, h / 2 - kr, kx + kr, h / 2 + kr, fill="#ffffff" if self._enabled else T.DIM, outline="")
+            border = T.BORDER
+            knob = T.DIM
+        elif on:
+            track = T.ACCENT_HI if self._hovering else T.ACCENT
+            border = track
+            knob = "#ffffff" if self._hovering else T.TEXT
+        else:
+            track = T.SURFACE3
+            border = T.BORDER_HI if self._hovering else T.BORDER
+            knob = "#ffffff" if self._hovering else T.TEXT
+
+        # Border pill + inset track pill (sharp at every Windows/Linux DPI)
+        self.create_oval(x0, y0, x0 + d, y1, fill=border, outline="")
+        self.create_rectangle(x0 + r, y0, x1 - r, y1, fill=border, outline="")
+        self.create_oval(x1 - d, y0, x1, y1, fill=border, outline="")
+
+        inset = 1
+        id_ = max(2, d - 2 * inset)
+        ir = id_ / 2.0
+        self.create_oval(x0 + inset, y0 + inset, x0 + inset + id_, y1 - inset, fill=track, outline="")
+        self.create_rectangle(x0 + inset + ir, y0 + inset, x1 - inset - ir, y1 - inset, fill=track, outline="")
+        self.create_oval(x1 - inset - id_, y0 + inset, x1 - inset, y1 - inset, fill=track, outline="")
+
+        # Thumb knob
+        cy = h / 2.0
+        kr = max(3.0, r - dp(3))
+        kx = (x1 - r) if on else (x0 + r)
+        self.create_oval(kx - kr, cy - kr, kx + kr, cy + kr, fill=knob, outline="")
 
     def _click(self, _e=None):
         if not self._enabled:
             return
-        if HAS_CTK:
-            self.value = not self.value
-            self._suppress = True
-            if self.value:
-                super().select()
-            else:
-                super().deselect()
-            self._suppress = False
-            if self.command:
-                self.command(self.value)
-        else:
-            self.value = not self.value
-            self._draw_fallback()
-            if self.command:
-                self.command(self.value)
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+        self.value = not self.value
+        self._paint_key = None
+        self._paint()
+        if self.command:
+            self.command(self.value)
 
     def set(self, value, notify=False):
         value = bool(value)
         if value != self.value:
             self.value = value
-            if HAS_CTK:
-                self._suppress = True
-                if value:
-                    super().select()
-                else:
-                    super().deselect()
-                self._suppress = False
-            else:
-                self._draw_fallback()
+            self._paint_key = None
+            self._paint()
         if notify and self.command:
             self.command(self.value)
 
     def get(self):
-        if HAS_CTK:
-            return bool(super().get())
         return self.value
 
     def set_enabled(self, enabled):
-        self._enabled = bool(enabled)
-        if HAS_CTK:
-            self.configure(
-                state="normal" if enabled else "disabled",
-                progress_color=T.ACCENT if enabled else T.SURFACE3,
-                button_color=T.TEXT if enabled else T.DIM,
-                cursor="hand2" if enabled else "arrow",
-            )
-        else:
-            self._draw_fallback()
+        flag = bool(enabled)
+        if flag == self._enabled:
+            return
+        self._enabled = flag
+        self.configure(cursor="hand2" if flag else "arrow")
+        self._paint_key = None
+        self._paint()
 
     def refresh_theme(self, bg=None):
-        if HAS_CTK:
-            kw = dict(fg_color=T.SURFACE3, progress_color=T.ACCENT if self._enabled else T.SURFACE3,
-                      button_color=T.TEXT if self._enabled else T.DIM)
-            if bg:
-                kw["bg_color"] = bg
-            self.configure(**kw)
-        else:
-            if bg:
-                self.configure(bg=bg)
-            self._draw_fallback()
+        if bg:
+            self._bg = bg
+            self.configure(bg=bg)
+        self._paint_key = None
+        self._paint()
 
 
 class Slider(tk.Canvas):
@@ -795,33 +820,96 @@ class SwitchRow(tk.Frame):
 
 
 _FrameBase = ctk.CTkFrame if HAS_CTK else tk.Frame
+_EntryBase = ctk.CTkEntry if HAS_CTK else tk.Entry
+_ProgressBase = ctk.CTkProgressBar if HAS_CTK else tk.Canvas
+
+
+class _SegProxy:
+    """Lightweight per-option button view exposed via Segmented.buttons when backed by CTkSegmentedButton."""
+
+    def __init__(self, seg, key):
+        self._seg = seg
+        self._key = key
+
+    @property
+    def _enabled(self):
+        return self._seg._enabled
+
+    def set_enabled(self, enabled):
+        self._seg.set_enabled(enabled)
 
 
 class Segmented(_FrameBase):
-    """Rounded pill container of mutually exclusive buttons. options = [(key, text), ...]"""
+    """Rounded pill segmented control backed by CTkSegmentedButton (with FlatButton fallback)."""
 
     def __init__(self, master, options, value=None, command=None, bg=None, size=9, padx=9, pady=3):
-        if HAS_CTK:
-            super().__init__(master, fg_color=T.SURFACE2, corner_radius=dp(8), border_width=1, border_color=T.BORDER)
-        else:
-            super().__init__(master, bg=bg or bg_of(master))
         self.command = command
         self.value = value
+        self._enabled = True
+        self._pairs = [(k, str(t)) for k, t in options]
+        self._k2l = {k: lab for k, lab in self._pairs}
+        self._l2k = {lab: k for k, lab in self._pairs}
+        self._bg = bg or bg_of(master)
         self.buttons = {}
-        inner_pad = dp(3) if HAS_CTK else 0
-        for i, (key, text) in enumerate(options):
-            init_style = "active" if key == self.value else ("ghost" if HAS_CTK else "normal")
-            b = FlatButton(self, text, command=lambda k=key: self._pick(k), style=init_style,
-                           padx=padx, pady=pady, size=size, corner=6)
-            b.pack(side="left", padx=(inner_pad if i == 0 else dp(2), inner_pad if i == len(options) - 1 else 0),
-                   pady=inner_pad)
-            self.buttons[key] = b
+        self._seg = None
+        if HAS_CTK:
+            super().__init__(master, fg_color=self._bg, corner_radius=0, border_width=0, width=10, height=10)
+            labels = [lab for _, lab in self._pairs] or [""]
+            h_px = dp(28 if size <= 9 else 32)
+            sel_bg = lerp_color(T.SURFACE2, T.ACCENT, 0.28)
+            sel_hv = lerp_color(T.SURFACE2, T.ACCENT, 0.38)
+            self._seg = ctk.CTkSegmentedButton(
+                self,
+                values=labels,
+                command=self._ctk_pick,
+                height=h_px,
+                corner_radius=dp(8),
+                border_width=dp(3),
+                fg_color=T.SURFACE2,
+                selected_color=sel_bg,
+                selected_hover_color=sel_hv,
+                unselected_color=T.SURFACE2,
+                unselected_hover_color=T.SURFACE3,
+                text_color=T.TEXT,
+                text_color_disabled=T.DIM,
+                font=font(size, "bold"),
+            )
+            self._seg.pack(fill="both", expand=True)
+            for k, _ in self._pairs:
+                self.buttons[k] = _SegProxy(self, k)
+            if self.value in self._k2l:
+                self._seg.set(self._k2l[self.value])
+        else:
+            super().__init__(master, bg=self._bg)
+            for i, (key, text) in enumerate(self._pairs):
+                init_style = "active" if key == self.value else "normal"
+                b = FlatButton(self, text, command=lambda k=key: self._pick(k), style=init_style,
+                               padx=padx, pady=pady, size=size, corner=6)
+                b.pack(side="left", padx=(0 if i == 0 else dp(2), 0))
+                self.buttons[key] = b
+
+    def _ctk_pick(self, label):
+        if not self._enabled:
+            if self._seg is not None and self.value in self._k2l:
+                self._seg.set(self._k2l[self.value])
+            return
+        key = self._l2k.get(label)
+        if key is not None and key != self.value:
+            self.value = key
+            if self.command:
+                self.command(key)
 
     def _paint(self):
-        for k, b in self.buttons.items():
-            b.set_style("active" if k == self.value else ("ghost" if HAS_CTK else "normal"))
+        if HAS_CTK:
+            if self._seg is not None and self.value in self._k2l:
+                self._seg.set(self._k2l[self.value])
+        else:
+            for k, b in self.buttons.items():
+                b.set_style("active" if k == self.value else "normal")
 
     def _pick(self, key):
+        if not self._enabled:
+            return
         if key != self.value:
             self.value = key
             self._paint()
@@ -837,13 +925,250 @@ class Segmented(_FrameBase):
     def get(self):
         return self.value
 
+    def set_enabled(self, enabled):
+        flag = bool(enabled)
+        self._enabled = flag
+        if HAS_CTK and self._seg is not None:
+            try:
+                self._seg.configure(state="normal" if flag else "disabled")
+            except Exception:
+                pass
+            if hasattr(self._seg, "_buttons_dict"):
+                for b in self._seg._buttons_dict.values():
+                    try:
+                        b.configure(state="normal" if flag else "disabled")
+                    except Exception:
+                        pass
+                    try:
+                        b.configure(cursor="hand2" if flag else "arrow")
+                    except Exception:
+                        pass
+        else:
+            for b in self.buttons.values():
+                b.set_enabled(flag)
+
     def refresh_theme(self, bg=None):
-        if HAS_CTK:
-            self.configure(fg_color=T.SURFACE2, border_color=T.BORDER)
+        if bg:
+            self._bg = bg
+        if HAS_CTK and self._seg is not None:
+            self.configure(fg_color=self._bg)
+            sel_bg = lerp_color(T.SURFACE2, T.ACCENT, 0.28)
+            sel_hv = lerp_color(T.SURFACE2, T.ACCENT, 0.38)
+            self._seg.configure(
+                fg_color=T.SURFACE2,
+                selected_color=sel_bg,
+                selected_hover_color=sel_hv,
+                unselected_color=T.SURFACE2,
+                unselected_hover_color=T.SURFACE3,
+                text_color=T.TEXT,
+                text_color_disabled=T.DIM,
+            )
+            self._paint()
         else:
             self.configure(bg=bg or bg_of(self.master))
-        for b in self.buttons.values():
-            b.refresh_theme()
+            for b in self.buttons.values():
+                b.refresh_theme()
+
+
+class TextInput(_EntryBase):
+    """Rounded Obsidian single-line text input backed by CTkEntry (with tk.Entry fallback)."""
+
+    def __init__(self, master, textvariable=None, width=20, placeholder="", size=10, weight="normal",
+                 display=False, justify="left", show_border=True, bg=None):
+        self._bg = bg or T.SURFACE2
+        self._show_border = bool(show_border)
+        self._enabled = True
+        self._custom_text_color = None
+        if HAS_CTK:
+            px_w = dp(max(52, int(width * 8.5)))
+            super().__init__(
+                master,
+                textvariable=textvariable,
+                width=px_w,
+                height=dp(30),
+                corner_radius=dp(8 if self._show_border else 0),
+                border_width=1 if self._show_border else 0,
+                fg_color=self._bg,
+                border_color=T.BORDER,
+                text_color=T.TEXT,
+                placeholder_text=placeholder or None,
+                placeholder_text_color=T.DIM,
+                font=font(size, weight, display),
+                justify=justify,
+            )
+        else:
+            super().__init__(
+                master,
+                textvariable=textvariable,
+                width=width,
+                bg=self._bg,
+                fg=T.TEXT,
+                insertbackground=T.ACCENT_HI,
+                relief="flat",
+                font=font(size, weight, display),
+                justify=justify,
+                highlightthickness=1 if self._show_border else 0,
+                highlightbackground=T.BORDER,
+                highlightcolor=T.ACCENT,
+                bd=0,
+            )
+
+    def set_text_color(self, color):
+        self._custom_text_color = color
+        if HAS_CTK:
+            self.configure(text_color=color)
+        else:
+            self.configure(fg=color)
+
+    def set_border_color(self, color):
+        if HAS_CTK:
+            self.configure(border_color=color)
+        elif self._show_border:
+            self.configure(highlightbackground=color)
+
+    def select_all(self):
+        target = getattr(self, "_entry", self)
+        try:
+            target.select_range(0, "end")
+            target.icursor("end")
+        except Exception:
+            pass
+
+    def set_enabled(self, enabled):
+        flag = bool(enabled)
+        self._enabled = flag
+        self.configure(state="normal" if flag else "disabled")
+        self.set_text_color((self._custom_text_color or T.TEXT) if flag else T.DIM)
+
+    def refresh_theme(self, bg=None):
+        if bg:
+            self._bg = bg
+        fg = (self._custom_text_color or T.TEXT) if self._enabled else T.DIM
+        if HAS_CTK:
+            self.configure(fg_color=self._bg, border_color=T.BORDER, text_color=fg, placeholder_text_color=T.DIM)
+        else:
+            self.configure(bg=self._bg, fg=fg, insertbackground=T.ACCENT_HI)
+            if self._show_border:
+                self.configure(highlightbackground=T.BORDER, highlightcolor=T.ACCENT)
+
+
+class ProgressBar(_ProgressBase):
+    """Slim rounded progress bar backed by CTkProgressBar (with Canvas fallback)."""
+
+    def __init__(self, master, height=4, color=None, bg=None, corner=2):
+        self._color = color or T.ACCENT
+        self._bg = bg or T.SURFACE3
+        self._frac = 0.0
+        self._fill = None
+        if HAS_CTK:
+            super().__init__(
+                master,
+                width=dp(60),
+                height=max(2, dp(height)),
+                corner_radius=dp(corner),
+                border_width=0,
+                fg_color=self._bg,
+                progress_color=self._color,
+            )
+            super().set(0.0)
+        else:
+            super().__init__(master, height=max(2, dp(height)), bg=self._bg, highlightthickness=0, bd=0)
+            self.bind("<Configure>", lambda _e: self._paint_fallback())
+
+    def _paint_fallback(self):
+        w = self.winfo_width()
+        if w < 8:
+            return
+        h = max(2, self.winfo_height() or dp(3))
+        if self._fill is None:
+            self._fill = self.create_rectangle(0, 0, w * self._frac, h, fill=self._color, outline="")
+        else:
+            self.coords(self._fill, 0, 0, w * self._frac, h)
+            self.itemconfigure(self._fill, fill=self._color)
+
+    def set_progress(self, frac, color=None):
+        f = min(1.0, max(0.0, float(frac)))
+        color_changed = bool(color and color != self._color)
+        if color:
+            self._color = color
+        self._frac = f
+        if HAS_CTK:
+            if color_changed:
+                self.configure(progress_color=self._color)
+            super().set(f)
+        else:
+            self._paint_fallback()
+
+    def refresh_theme(self, color=None, bg=None):
+        if color:
+            self._color = color
+        if bg:
+            self._bg = bg
+        if HAS_CTK:
+            self.configure(fg_color=self._bg, progress_color=self._color)
+        else:
+            self.configure(bg=self._bg)
+            self._paint_fallback()
+
+
+class SurfaceBox(_FrameBase):
+    """Rounded Obsidian container panel with 1px border (CTkFrame with tk.Frame fallback)."""
+
+    def __init__(self, master, bg=None, border=None, corner=8, **kw):
+        self._box_bg = bg or T.SURFACE2
+        self._box_border = border or T.BORDER
+        if HAS_CTK:
+            super().__init__(master, fg_color=self._box_bg, corner_radius=dp(corner),
+                             border_width=1, border_color=self._box_border, **kw)
+        else:
+            super().__init__(master, bg=self._box_bg, highlightthickness=1,
+                             highlightbackground=self._box_border, highlightcolor=self._box_border, bd=0, **kw)
+
+    def refresh_theme(self, bg=None, border=None):
+        if bg:
+            self._box_bg = bg
+        if border:
+            self._box_border = border
+        if HAS_CTK:
+            self.configure(fg_color=self._box_bg, border_color=self._box_border)
+        else:
+            self.configure(bg=self._box_bg, highlightbackground=self._box_border)
+
+
+class PillBadge(_FrameBase):
+    """Compact rounded status badge pill."""
+
+    def __init__(self, master, text="", fg=None, bg=None, border=None, size=8, bold=True,
+                 display=False, padx=8, pady=2, corner=7, width=None):
+        self._badge_fg = fg or T.TEXT
+        self._badge_bg = bg or T.SURFACE2
+        self._badge_border = border or T.BORDER
+        if HAS_CTK:
+            super().__init__(master, fg_color=self._badge_bg, corner_radius=dp(corner),
+                             border_width=1, border_color=self._badge_border)
+        else:
+            super().__init__(master, bg=self._badge_bg, highlightthickness=1,
+                             highlightbackground=self._badge_border, bd=0)
+        lbl_kw = {"width": width} if width is not None else {}
+        self._label = tk.Label(self, text=text, bg=self._badge_bg, fg=self._badge_fg,
+                               font=font(size, "bold" if bold else "normal", display), **lbl_kw)
+        self._label.pack(padx=dp(padx), pady=dp(pady))
+
+    def set_badge(self, text, fg=None, bg=None, border=None):
+        if fg:
+            self._badge_fg = fg
+        if bg:
+            self._badge_bg = bg
+        if border:
+            self._badge_border = border
+        if HAS_CTK:
+            self.configure(fg_color=self._badge_bg, border_color=self._badge_border)
+        else:
+            self.configure(bg=self._badge_bg, highlightbackground=self._badge_border)
+        self._label.configure(text=text, fg=self._badge_fg, bg=self._badge_bg)
+
+    def refresh_theme(self, fg=None, bg=None, border=None):
+        self.set_badge(self._label.cget("text"), fg=fg, bg=bg, border=border)
 
 
 _ComboBase = ctk.CTkOptionMenu if HAS_CTK else ttk.Combobox
@@ -907,6 +1232,13 @@ class Combo(_ComboBase):
             self.configure(values=self._items)
             if current is not None:
                 self.set(str(current))
+
+    def set_enabled(self, enabled):
+        flag = bool(enabled)
+        if HAS_CTK:
+            self.configure(state="normal" if flag else "disabled")
+        else:
+            self.configure(state="readonly" if flag else "disabled")
 
 
 class Card(_FrameBase):
@@ -975,9 +1307,40 @@ class Tooltip:
         self.widget, self.text, self.delay = widget, text, delay
         self._job = None
         self._tip = None
-        widget.bind("<Enter>", self._schedule, add="+")
-        widget.bind("<Leave>", self._hide, add="+")
-        widget.bind("<ButtonPress>", self._hide, add="+")
+        self._attach(widget)
+
+    def _attach(self, widget):
+        src = getattr(widget, "_seg", widget)
+        targets = (
+            list(src._buttons_dict.values())
+            if hasattr(src, "_buttons_dict") and isinstance(src._buttons_dict, dict)
+            else [widget]
+        )
+        for t in targets:
+            try:
+                t.bind("<Enter>", self._schedule, add="+")
+                t.bind("<Leave>", self._hide, add="+")
+                t.bind("<ButtonPress>", self._hide, add="+")
+                t.bind("<Unmap>", self._hide, add="+")
+                t.bind("<Destroy>", self._hide, add="+")
+            except NotImplementedError:
+                for child in t.winfo_children():
+                    try:
+                        child.bind("<Enter>", self._schedule, add="+")
+                        child.bind("<Leave>", self._hide, add="+")
+                        child.bind("<ButtonPress>", self._hide, add="+")
+                        child.bind("<Unmap>", self._hide, add="+")
+                        child.bind("<Destroy>", self._hide, add="+")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        if src is not widget:
+            try:
+                widget.bind("<Unmap>", self._hide, add="+")
+                widget.bind("<Destroy>", self._hide, add="+")
+            except Exception:
+                pass
 
     def _schedule(self, _e=None):
         self._hide()
@@ -985,6 +1348,8 @@ class Tooltip:
 
     def _show(self):
         try:
+            if not self.widget.winfo_exists():
+                return
             x = self.widget.winfo_rootx() + dp(10)
             y = self.widget.winfo_rooty() + self.widget.winfo_height() + dp(4)
             self._tip = tk.Toplevel(self.widget)
@@ -992,12 +1357,14 @@ class Tooltip:
             tk.Label(self._tip, text=self.text, bg=T.SURFACE2, fg=T.TEXT, font=font(9), padx=dp(10), pady=dp(6),
                      justify="left", wraplength=dp(320), highlightthickness=1, highlightbackground=T.BORDER_HI).pack()
             self._tip.update_idletasks()
-            sw, sh = self._tip.winfo_screenwidth(), self._tip.winfo_screenheight()
+            vx, vy, vw, vh = screen_bounds(self._tip)
             tw = self._tip.winfo_reqwidth()
             th = self._tip.winfo_reqheight()
-            x = max(dp(6), min(x, sw - tw - dp(8)))
-            if y + th > sh - dp(8):
-                y = max(dp(6), self.widget.winfo_rooty() - th - dp(4))
+            x = max(vx + dp(6), min(x, vx + vw - tw - dp(8)))
+            if y + th > vy + vh - dp(8):
+                y = max(vy + dp(6), self.widget.winfo_rooty() - th - dp(4))
+            else:
+                y = max(vy + dp(6), y)
             self._tip.wm_geometry(f"+{x}+{y}")
         except Exception:
             self._tip = None
@@ -1165,6 +1532,35 @@ class ScrollFrame(tk.Frame):
             pass
 
 
+class ScrollTextBox(SurfaceBox):
+    """Rounded Obsidian container wrapping a tk.Text widget with a slim dark scrollbar."""
+
+    def __init__(self, master, height=10, text_font=None, bg=None, wrap="none", **text_kw):
+        box_bg = bg or T.SIDEBAR
+        super().__init__(master, bg=box_bg, border=T.BORDER, corner=8)
+        self.vsb = _DarkScrollbar(self, self._scroll, bg=box_bg)
+        self.vsb.pack(side="right", fill="y", padx=(0, dp(3)), pady=dp(4))
+        self.textbox = tk.Text(
+            self,
+            height=height,
+            bg=box_bg,
+            fg=T.TEXT,
+            relief="flat",
+            font=text_font or (MONO_FONT, 9),
+            wrap=wrap,
+            highlightthickness=0,
+            bd=0,
+            padx=dp(10),
+            pady=dp(8),
+            yscrollcommand=self.vsb.set,
+            **text_kw,
+        )
+        self.textbox.pack(side="left", fill="both", expand=True, padx=(dp(4), 0), pady=dp(4))
+
+    def _scroll(self, *args):
+        self.textbox.yview(*args)
+
+
 # ==============================================================================
 # VECTOR ICONS & SIDEBAR NAV
 # ==============================================================================
@@ -1224,6 +1620,105 @@ def draw_icon(c, name, color, size):
         c.create_rectangle(7 * k, 2 * k, 13 * k, 12 * k, outline=color, width=w)
         c.create_arc(4 * k, 6 * k, 16 * k, 16 * k, start=200, extent=140, style="arc", outline=color, width=w)
         c.create_line(10 * k, 15 * k, 10 * k, 18 * k, fill=color, width=w)
+    elif name == "cat":
+        ww = max(1, int(round(1.15 * k)))
+        c.create_polygon(
+            4.2 * k, 8.2 * k,
+            3.6 * k, 3.0 * k,
+            7.4 * k, 5.8 * k,
+            12.6 * k, 5.8 * k,
+            16.4 * k, 3.0 * k,
+            15.8 * k, 8.2 * k,
+            16.6 * k, 12.6 * k,
+            13.2 * k, 16.5 * k,
+            6.8 * k, 16.5 * k,
+            3.4 * k, 12.6 * k,
+            fill="",
+            outline=color,
+            width=w,
+            joinstyle="round",
+        )
+        er = 0.95 * k
+        c.create_oval(7.4 * k - er, 10.2 * k - er, 7.4 * k + er, 10.2 * k + er, fill=color, outline="")
+        c.create_oval(12.6 * k - er, 10.2 * k - er, 12.6 * k + er, 10.2 * k + er, fill=color, outline="")
+        c.create_polygon(9.0 * k, 12.1 * k, 11.0 * k, 12.1 * k, 10.0 * k, 13.4 * k, fill=color, outline="")
+        c.create_line(1.5 * k, 11.4 * k, 5.2 * k, 11.9 * k, fill=color, width=ww, capstyle="round")
+        c.create_line(1.8 * k, 13.8 * k, 5.2 * k, 13.4 * k, fill=color, width=ww, capstyle="round")
+        c.create_line(14.8 * k, 11.9 * k, 18.5 * k, 11.4 * k, fill=color, width=ww, capstyle="round")
+        c.create_line(14.8 * k, 13.4 * k, 18.2 * k, 13.8 * k, fill=color, width=ww, capstyle="round")
+
+
+class CatPreviewButton(SurfaceBox):
+    """Compact vector cat button for Voice FX previewing and custom WAV management."""
+
+    def __init__(self, master, command=None, menu_command=None, size=18):
+        self._cat_cmd = command
+        self._cat_menu_cmd = menu_command
+        self._cat_sz = dp(size)
+        self._cat_hover = False
+        self._cat_playing = False
+        self._cat_paint_key = None
+        super().__init__(master, bg=T.SURFACE2, border=T.BORDER, corner=6, cursor="hand2")
+        self.canvas = tk.Canvas(
+            self,
+            width=self._cat_sz,
+            height=self._cat_sz,
+            bg=T.SURFACE2,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        self.canvas.pack(padx=dp(5), pady=dp(4))
+        for w in (self, self.canvas):
+            w.bind("<Enter>", lambda _e: self._paint_cat(hover=True))
+            w.bind("<Leave>", lambda _e: self._paint_cat(hover=False))
+            w.bind("<Button-1>", self._on_left_click)
+            w.bind("<Button-3>", self._on_right_click)
+            w.bind("<Button-2>", self._on_right_click)
+        self._paint_cat()
+
+    def _on_left_click(self, _e=None):
+        if self._cat_cmd:
+            self._cat_cmd()
+
+    def _on_right_click(self, e=None):
+        if self._cat_menu_cmd:
+            self._cat_menu_cmd(self, e)
+
+    def _paint_cat(self, hover=None):
+        if hover is not None:
+            self._cat_hover = bool(hover)
+        hi_col = T.ACCENT if T.IS_MONO else T.BLUE
+        hi_fg = T.ACCENT_HI if T.IS_MONO else T.BLUE_HI
+        if self._cat_playing:
+            bg = lerp_color(T.SURFACE2, hi_col, 0.24)
+            border = hi_col
+            fg = hi_fg
+        elif self._cat_hover:
+            bg = T.SURFACE3
+            border = T.BORDER_HI
+            fg = T.TEXT
+        else:
+            bg = T.SURFACE2
+            border = T.BORDER
+            fg = hi_fg if not T.IS_MONO else T.MUTED
+        pkey = (bg, border, fg, self._cat_sz)
+        if pkey == self._cat_paint_key:
+            return
+        self._cat_paint_key = pkey
+        super().refresh_theme(bg=bg, border=border)
+        self.canvas.configure(bg=bg)
+        draw_icon(self.canvas, "cat", fg, self._cat_sz)
+
+    def set_playing(self, playing):
+        flag = bool(playing)
+        if flag != self._cat_playing:
+            self._cat_playing = flag
+            self._paint_cat()
+
+    def refresh_theme(self, bg=None, border=None):
+        self._cat_paint_key = None
+        self._paint_cat()
 
 
 class NavButton(_FrameBase):

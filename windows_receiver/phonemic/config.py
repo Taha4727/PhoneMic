@@ -22,6 +22,7 @@ DEFAULTS = {
         "pitch_semitones": 0.0,
         "formant_semitones": 0.0,
         "mix": 1.0,
+        "preview_wav_path": "",
     },
     "network": {
         "port": DEFAULT_PORT,
@@ -74,6 +75,7 @@ DEFAULTS = {
         "window_geometry": "",
         "ui_mode": "default",        # default (full studio) | minimal (compact mini widget)
         "minimal_geometry": "",
+        "show_cat_preview": False,
     },
     "user_fx_presets": {},
     "user_voice_presets": {},

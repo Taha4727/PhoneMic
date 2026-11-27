@@ -6,9 +6,10 @@ Master Gain trim, connection state, and output device with instant toggle back t
 import time
 import tkinter as tk
 
+from . import settings_meta as sm
 from .const import VERSION, APP_NAME
 from .dsp import lin_to_db
-from .widgets import T, HAS_CTK, ctk, dp, font, FlatButton, LevelMeter, Tooltip
+from .widgets import T, HAS_CTK, ctk, dp, font, FlatButton, LevelMeter, Tooltip, SurfaceBox
 
 
 def _state_style(state):
@@ -58,10 +59,7 @@ class MinimalView(_MinimalBase):
         btn_expand.pack(side="right", padx=(dp(5), 0))
         Tooltip(btn_expand, "Switch to full Studio interface with EQ, Voice Changer & Connections (F10)")
 
-        if HAS_CTK:
-            self.chip = ctk.CTkFrame(top, fg_color=T.SURFACE, corner_radius=dp(7), border_width=1, border_color=T.BORDER)
-        else:
-            self.chip = tk.Frame(top, bg=T.SURFACE, highlightthickness=1, highlightbackground=T.BORDER)
+        self.chip = SurfaceBox(top, bg=T.SURFACE, border=T.BORDER, corner=7)
         self.chip.pack(side="right")
         chip_in = tk.Frame(self.chip, bg=T.SURFACE)
         chip_in.pack(padx=dp(7), pady=dp(2))
@@ -71,10 +69,7 @@ class MinimalView(_MinimalBase):
         self.chip_text.pack(side="left")
 
         # 2. Matte Obsidian Connection Card
-        if HAS_CTK:
-            info_card = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=dp(8), border_width=1, border_color=T.BORDER)
-        else:
-            info_card = tk.Frame(self, bg=T.SURFACE, highlightthickness=1, highlightbackground=T.BORDER)
+        info_card = SurfaceBox(self, bg=T.SURFACE, border=T.BORDER, corner=8)
         info_card.pack(fill="x", padx=dp(8), pady=(0, dp(4)))
 
         info_top = tk.Frame(info_card, bg=T.SURFACE)
@@ -153,6 +148,8 @@ class MinimalView(_MinimalBase):
         val_db = round(val_db * 2.0) / 2.0
         self.proc.set_param("out_gain_db", val_db)
         self.app.binder.persist_fx()
+        self.app.binder.announce(sm.BY_KEY["out_gain_db"])
+        self.app.refresh_preset_marks()
         self.refresh_controls()
 
     def refresh_controls(self, force=False):
@@ -219,7 +216,7 @@ class MinimalView(_MinimalBase):
         now = time.monotonic()
         dt = min(0.2, now - self.last)
         self.last = now
-        live = rx.state() == "streaming"
+        live = rx.state() == "streaming" or rx.preview_active
         peak = proc.level_db if live else -80.0
         rms = lin_to_db(proc.level_rms, -80.0) if live else -80.0
         self.peak_s = peak if peak > self.peak_s else max(peak, self.peak_s - 60.0 * dt)

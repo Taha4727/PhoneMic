@@ -14,8 +14,9 @@ from .bindings import SettingsBinder
 from .const import VERSION, APP_NAME
 from .dsp import FX_BUILTIN_PRESETS, VoiceChanger, fx_preset, lin_to_db
 from .widgets import (T, HAS_CTK, ctk, dp, font, set_scale, create_root, create_toplevel, apply_styles, apply_accent,
-                      init_fonts, draw_icon, lerp_color, FlatButton, Segmented, Combo, Card, ScrollFrame, NavButton,
-                      LevelMeter, SpectrumView, Tooltip, autowrap)
+                      init_fonts, draw_icon, lerp_color, screen_bounds, FlatButton, Segmented, Combo, Card, ScrollFrame,
+                      NavButton, LevelMeter, SpectrumView, Tooltip, autowrap,
+                      TextInput, ProgressBar, SurfaceBox, PillBadge, CatPreviewButton, _FrameBase)
 from .ui_kit import SettingRow, GaugeRow, SearchBox
 from .minimal_gui import MinimalView
 from .qr import generate_qr_matrix
@@ -76,11 +77,10 @@ class PromptDialog:
         tk.Label(win, text=prompt, bg=T.SURFACE, fg=T.TEXT, font=font(10), anchor="w").pack(
             fill="x", padx=dp(18), pady=(dp(16), dp(6)))
         self.var = tk.StringVar(value=initial)
-        e = tk.Entry(win, textvariable=self.var, bg=T.SURFACE2, fg=T.TEXT, insertbackground=T.ACCENT_HI, relief="flat",
-                     font=font(11), width=34, highlightthickness=1, highlightbackground=T.BORDER, highlightcolor=T.ACCENT)
-        e.pack(padx=dp(18), ipady=dp(5))
+        e = TextInput(win, textvariable=self.var, width=34, size=11)
+        e.pack(padx=dp(18), ipady=0 if HAS_CTK else dp(5))
         e.focus_set()
-        e.select_range(0, "end")
+        e.select_all()
 
         row = tk.Frame(win, bg=T.SURFACE)
         row.pack(fill="x", padx=dp(18), pady=dp(16))
@@ -90,9 +90,14 @@ class PromptDialog:
         win.bind("<Escape>", lambda ev: win.destroy())
         try:
             win.update_idletasks()
-            x = parent.winfo_rootx() + (parent.winfo_width() - win.winfo_width()) // 2
+            vx, vy, vw, vh = screen_bounds(win)
+            ww = win.winfo_width() or win.winfo_reqwidth()
+            wh = win.winfo_height() or win.winfo_reqheight()
+            x = parent.winfo_rootx() + (parent.winfo_width() - ww) // 2
             y = parent.winfo_rooty() + dp(120)
-            win.geometry(f"+{max(0, x)}+{max(0, y)}")
+            x = max(vx + dp(6), min(x, vx + vw - ww - dp(6)))
+            y = max(vy + dp(6), min(y, vy + vh - wh - dp(6)))
+            win.geometry(f"+{x}+{y}")
             win.grab_set()
         except Exception:
             pass
@@ -118,7 +123,7 @@ class QRPopupDialog:
         tk.Label(win, text="Open PhoneMic on your phone and tap Scan PC QR.", bg=T.SURFACE, fg=T.MUTED,
                  font=font(9)).pack(padx=dp(20), pady=(0, dp(12)))
 
-        box = tk.Frame(win, bg=T.BG, highlightthickness=1, highlightbackground=T.BORDER_HI)
+        box = SurfaceBox(win, bg="#ffffff", border=T.BORDER_HI, corner=10)
         box.pack(padx=dp(24))
         sz = dp(200)
         canvas = tk.Canvas(box, width=sz, height=sz, bg="#ffffff", highlightthickness=0)
@@ -138,8 +143,8 @@ class QRPopupDialog:
         except Exception:
             pass
 
-        tk.Label(win, text=payload, bg=T.SURFACE, fg=T.ACCENT_HI, font=font(10, "bold", True)).pack(
-            padx=dp(20), pady=(dp(10), dp(12)))
+        PillBadge(win, payload, fg=T.ACCENT_HI, bg=T.SURFACE2, border=T.BORDER, size=9,
+                  display=True, padx=12, pady=4, corner=8).pack(padx=dp(20), pady=(dp(10), dp(12)))
 
         row = tk.Frame(win, bg=T.SURFACE)
         row.pack(fill="x", padx=dp(20), pady=(0, dp(16)))
@@ -149,9 +154,14 @@ class QRPopupDialog:
         win.bind("<Escape>", lambda ev: win.destroy())
         try:
             win.update_idletasks()
-            x = parent.winfo_rootx() + (parent.winfo_width() - win.winfo_width()) // 2
+            vx, vy, vw, vh = screen_bounds(win)
+            ww = win.winfo_width() or win.winfo_reqwidth()
+            wh = win.winfo_height() or win.winfo_reqheight()
+            x = parent.winfo_rootx() + (parent.winfo_width() - ww) // 2
             y = parent.winfo_rooty() + dp(90)
-            win.geometry(f"+{max(0, x)}+{max(0, y)}")
+            x = max(vx + dp(6), min(x, vx + vw - ww - dp(6)))
+            y = max(vy + dp(6), min(y, vy + vh - wh - dp(6)))
+            win.geometry(f"+{x}+{y}")
         except Exception:
             pass
 
@@ -238,6 +248,7 @@ class App:
         self._hdr_job = None
         self._pending_hdr_w = None
         self._syncing_devices = False
+        self._cat_menu = None
         self.actions_q = queue.Queue()
         self._tray_hint_shown = False
         self.hotkeys = HotkeyService(self._hk_press, self._hk_hold, log=lambda m: self.rx.log.warn(m))
@@ -389,8 +400,10 @@ class App:
         m = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", geo or "")
         if m:
             w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-            ok = w >= dp(720) and h >= dp(480) and -50 <= x < sw - 150 and -10 <= y < sh - 100
+            vx, vy, vw, vh = screen_bounds(self.root)
+            ok = (w >= dp(720) and h >= dp(480)
+                  and vx - dp(50) <= x < vx + vw - dp(150)
+                  and vy - dp(10) <= y < vy + vh - dp(100))
         self._init_w = w if ok else dp(940)
         self.root.geometry(geo if ok else f"{dp(940)}x{dp(630)}")
 
@@ -429,7 +442,7 @@ class App:
         self.side_view_label.pack(fill="x", pady=(0, dp(5)))
         adv = sm.BY_KEY["app.advanced_mode"]
         self.view_toggle = Segmented(foot, [(False, "Simple"), (True, "Advanced")], self.advanced,
-                                     lambda v: self.binder.set(adv, v, source=self._view_listener), bg=T.SIDEBAR)
+                                     lambda v: self.binder.set(adv, v), bg=T.SIDEBAR)
         self.view_toggle.pack(anchor="w")
         Tooltip(self.view_toggle, "Simple shows essentials. Advanced reveals every DSP and buffer parameter.")
         self.btn_view_compact = FlatButton(foot, "Adv" if self.advanced else "Sim",
@@ -451,9 +464,11 @@ class App:
         hb.grid_columnconfigure(2, weight=0)
 
         self.head_left = head_left = tk.Frame(hb, bg=T.BG)
-        self.btn_sidebar = tk.Canvas(head_left, width=dp(30), height=dp(30), bg=T.SURFACE2, highlightthickness=1,
-                                     highlightbackground=T.BORDER, bd=0, cursor="hand2")
-        self.btn_sidebar.pack(side="left", padx=(0, dp(10)))
+        self.btn_sidebar_wrap = SurfaceBox(head_left, bg=T.SURFACE2, border=T.BORDER, corner=8)
+        self.btn_sidebar_wrap.pack(side="left", padx=(0, dp(10)))
+        self.btn_sidebar = tk.Canvas(self.btn_sidebar_wrap, width=dp(24), height=dp(24), bg=T.SURFACE2,
+                                     highlightthickness=0, bd=0, cursor="hand2")
+        self.btn_sidebar.pack(padx=dp(3), pady=dp(3))
         self.btn_sidebar.bind("<Button-1>", lambda e: self.toggle_sidebar())
         self.btn_sidebar.bind("<Enter>", lambda e: self._paint_sidebar_btn(hover=True))
         self.btn_sidebar.bind("<Leave>", lambda e: self._paint_sidebar_btn(hover=False))
@@ -469,11 +484,7 @@ class App:
         self.btn_compact.pack(side="right", padx=(dp(8), 0))
         Tooltip(self.btn_compact, "Switch to compact Minimal GUI widget (F10)")
 
-        if HAS_CTK:
-            chip = ctk.CTkFrame(head_right, fg_color=T.SURFACE, corner_radius=dp(8), border_width=1, border_color=T.BORDER)
-        else:
-            chip = tk.Frame(head_right, bg=T.SURFACE, highlightthickness=1, highlightbackground=T.BORDER)
-        self.chip = chip
+        self.chip = chip = SurfaceBox(head_right, bg=T.SURFACE, border=T.BORDER, corner=8)
         chip.pack(side="right")
         self.chip_in = chip_in = tk.Frame(chip, bg=T.SURFACE)
         chip_in.pack(padx=dp(9), pady=dp(4))
@@ -559,12 +570,12 @@ class App:
     def _paint_sidebar_btn(self, hover=None):
         if hover is not None:
             self._sidebar_btn_hover = hover
-        self.btn_sidebar.configure(
-            bg=T.SURFACE3 if self._sidebar_btn_hover else T.SURFACE2,
-            highlightbackground=T.BORDER_HI if self._sidebar_btn_hover else T.BORDER,
-        )
+        bg = T.SURFACE3 if self._sidebar_btn_hover else T.SURFACE2
+        border = T.BORDER_HI if self._sidebar_btn_hover else T.BORDER
+        self.btn_sidebar_wrap.refresh_theme(bg=bg, border=border)
+        self.btn_sidebar.configure(bg=bg)
         icon_name = "sidebar_expand" if self.sidebar_collapsed else "sidebar_collapse"
-        draw_icon(self.btn_sidebar, icon_name, T.TEXT if self._sidebar_btn_hover else T.MUTED, dp(20))
+        draw_icon(self.btn_sidebar, icon_name, T.TEXT if self._sidebar_btn_hover else T.MUTED, dp(18))
 
     def toggle_sidebar(self):
         self.sidebar_collapsed = not self.sidebar_collapsed
@@ -641,10 +652,7 @@ class App:
         for w in (self.main_frame, self.header_box, self.head_left, self.head_right, self.actions, self.content):
             w.configure(bg=T.BG)
         self.title_label.configure(bg=T.BG, fg=T.TEXT)
-        if HAS_CTK:
-            self.chip.configure(fg_color=T.SURFACE, border_color=T.BORDER)
-        else:
-            self.chip.configure(bg=T.SURFACE, highlightbackground=T.BORDER)
+        self.chip.refresh_theme(bg=T.SURFACE, border=T.BORDER)
         self.chip_in.configure(bg=T.SURFACE)
         self.chip_dot.configure(bg=T.SURFACE)
         self.chip_text.configure(bg=T.SURFACE, fg=T.TEXT)
@@ -693,7 +701,9 @@ class App:
 
         self._hdr_cache = None
         self._sb_cache = None
+        self._close_cat_menu()
         self.refresh_preset_ui()
+        self.refresh_cat_ui()
         self.binder.sync_all()
         self.refresh_header()
         self.refresh_statusbar()
@@ -735,6 +745,12 @@ class App:
             if save_previous_geo and self.ui_mode == "default" and root.state() == "normal":
                 self.cfg.data["app"]["window_geometry"] = root.winfo_geometry()
 
+            try:
+                if root.state() == "zoomed":
+                    root.state("normal")
+            except Exception:
+                pass
+
             self.side_frame.pack_forget()
             self.main_frame.pack_forget()
 
@@ -749,8 +765,10 @@ class App:
             m = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", mg or "")
             if m:
                 w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-                sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-                ok = w >= dp(280) and h >= dp(150) and -50 <= x < sw - 100 and -10 <= y < sh - 80
+                vx, vy, vw, vh = screen_bounds(root)
+                ok = (w >= dp(280) and h >= dp(150)
+                      and vx - dp(50) <= x < vx + vw - dp(100)
+                      and vy - dp(10) <= y < vy + vh - dp(80))
             root.geometry(mg if ok else f"{dp(330)}x{dp(185)}")
 
             self.ui_mode = "minimal"
@@ -968,6 +986,141 @@ class App:
         if sound_page is not None and hasattr(sound_page, "sync_voice"):
             sound_page.sync_voice()
         self.notify(f"Voice preset: {name}", "good", 2500)
+
+    # ---- Cat Voice Preview -----------------------------------------------------------------------------------------------
+    def cat_preview_visible(self):
+        return bool(self.cfg.data["app"].get("show_cat_preview", False))
+
+    def set_cat_preview_visible(self, visible):
+        flag = bool(visible)
+        self.cfg.data["app"]["show_cat_preview"] = flag
+        self.cfg.save_soon()
+        if not flag:
+            self.rx.stop_cat_preview()
+            self._close_cat_menu()
+        self.refresh_cat_ui()
+
+    def refresh_cat_ui(self):
+        dash = self.pages.get("dashboard")
+        if dash is not None and hasattr(dash, "sync_cat_preview"):
+            dash.sync_cat_preview()
+        sound_page = self.pages.get("sound")
+        if sound_page is not None and hasattr(sound_page, "sync_cat_preview"):
+            sound_page.sync_cat_preview()
+        settings_page = self.pages.get("settings")
+        if settings_page is not None and hasattr(settings_page, "sync_cat_toggle"):
+            settings_page.sync_cat_toggle()
+
+    def preview_cat_voice(self):
+        ok, msg = self.rx.play_cat_preview()
+        if not ok:
+            self.notify(msg or "Could not preview cat sound.", "error", 5000)
+        dash = self.pages.get("dashboard")
+        if dash is not None and hasattr(dash, "cat_btn") and self.cat_preview_visible():
+            dash.cat_btn.set_playing(ok and self.rx.preview_active)
+
+    def stop_cat_preview(self):
+        self.rx.stop_cat_preview()
+        dash = self.pages.get("dashboard")
+        if dash is not None and hasattr(dash, "cat_btn"):
+            dash.cat_btn.set_playing(False)
+
+    def upload_cat_wav(self):
+        path = filedialog.askopenfilename(
+            parent=self.root,
+            title="Choose custom cat sound (.wav)",
+            filetypes=[("WAV audio", "*.wav"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        ok, msg = self.rx.set_cat_preview_wav(path)
+        if ok:
+            self.refresh_cat_ui()
+            self.notify(f"Cat preview sound set to {msg}.", "good", 4000)
+        else:
+            self.notify(f"Could not load WAV: {msg}", "error", 6000)
+
+    def reset_cat_wav(self):
+        ok, msg = self.rx.set_cat_preview_wav("")
+        if ok:
+            self.refresh_cat_ui()
+            self.notify("Cat preview reset to built-in meow.", "good", 3000)
+        else:
+            self.notify(f"Could not reset cat sound: {msg}", "error", 5000)
+
+    def _close_cat_menu(self):
+        pop = self._cat_menu
+        self._cat_menu = None
+        if pop is not None:
+            try:
+                if pop.winfo_exists():
+                    pop.destroy()
+            except Exception:
+                pass
+
+    def show_cat_menu(self, anchor_widget, event=None):
+        self._close_cat_menu()
+        pop = create_toplevel(self.root, fg_color=T.SURFACE)
+        self._cat_menu = pop
+        try:
+            pop.wm_overrideredirect(True)
+        except Exception:
+            pass
+        try:
+            pop.transient(self.root)
+            pop.attributes("-topmost", True)
+        except Exception:
+            pass
+        box = SurfaceBox(pop, bg=T.SURFACE, border=T.BORDER_HI, corner=8)
+        box.pack(fill="both", expand=True)
+
+        def run_item(fn):
+            self._close_cat_menu()
+            fn()
+
+        def add_item(text, fn, fg=None):
+            row = tk.Label(
+                box,
+                text=text,
+                bg=T.SURFACE,
+                fg=fg or T.TEXT,
+                font=font(9),
+                anchor="w",
+                padx=dp(12),
+                pady=dp(6),
+                cursor="hand2",
+            )
+            row.pack(fill="x", padx=dp(2), pady=dp(1))
+            row.bind("<Enter>", lambda _e, r=row: r.configure(bg=T.SURFACE3))
+            row.bind("<Leave>", lambda _e, r=row: r.configure(bg=T.SURFACE))
+            row.bind("<Button-1>", lambda _e, cb=fn: run_item(cb))
+
+        add_item("Preview meow", self.preview_cat_voice)
+        if self.rx.preview_active:
+            add_item("Stop preview", self.stop_cat_preview, fg=T.WARN)
+        add_item("Upload custom WAV...", self.upload_cat_wav)
+        _label, is_custom = self.rx.cat_preview_info()
+        if is_custom:
+            add_item("Use default cat", self.reset_cat_wav, fg=T.MUTED)
+
+        pop.bind("<Escape>", lambda _e: self._close_cat_menu())
+        pop.bind("<FocusOut>", lambda _e: self._close_cat_menu())
+        try:
+            pop.update_idletasks()
+            vx, vy, vw, vh = screen_bounds(pop)
+            ww = max(dp(168), pop.winfo_reqwidth())
+            wh = max(dp(60), pop.winfo_reqheight())
+            ax = getattr(event, "x_root", None)
+            ay = getattr(event, "y_root", None)
+            if not isinstance(ax, int) or not isinstance(ay, int):
+                ax = anchor_widget.winfo_rootx()
+                ay = anchor_widget.winfo_rooty() + anchor_widget.winfo_height() + dp(4)
+            x = max(vx + dp(6), min(ax, vx + vw - ww - dp(6)))
+            y = max(vy + dp(6), min(ay, vy + vh - wh - dp(6)))
+            pop.geometry(f"+{x}+{y}")
+            pop.focus_set()
+        except Exception:
+            pass
 
     # ---- Preset Import / Export ------------------------------------------------------------------------------------------
     def export_preset(self, kind):
@@ -1216,11 +1369,14 @@ class App:
 # ==============================================================================
 # STUDIO HOME DASHBOARD
 # ==============================================================================
-class TelemetryTile(tk.Frame):
-    """OBS-style compact matte telemetry cell with dot, label, bold numeric value, and 3dp bar."""
+class TelemetryTile(_FrameBase):
+    """OBS-style compact matte telemetry cell with dot, label, bold numeric value, and rounded ProgressBar."""
 
     def __init__(self, master, label, accent=None):
-        super().__init__(master, bg=T.SURFACE2, highlightthickness=1, highlightbackground=T.BORDER, bd=0)
+        if HAS_CTK:
+            super().__init__(master, fg_color=T.SURFACE2, corner_radius=dp(8), border_width=1, border_color=T.BORDER)
+        else:
+            super().__init__(master, bg=T.SURFACE2, highlightthickness=1, highlightbackground=T.BORDER, bd=0)
         self._text = "-"
         self._frac = 0.0
         self._color = accent or T.ACCENT
@@ -1235,21 +1391,8 @@ class TelemetryTile(tk.Frame):
         self.val = tk.Label(self, text="-", bg=T.SURFACE2, fg=T.DIM, font=font(13, "bold", True), anchor="w")
         self.val.pack(fill="x", padx=dp(9), pady=(0, dp(3)))
 
-        self.bar = tk.Canvas(self, height=dp(3), bg=T.SURFACE3, highlightthickness=0, bd=0)
+        self.bar = ProgressBar(self, height=4, color=self._color, bg=T.SURFACE3, corner=2)
         self.bar.pack(fill="x", padx=dp(9), pady=(0, dp(6)))
-        self._fill = None
-        self.bar.bind("<Configure>", lambda e: self._redraw_bar())
-
-    def _redraw_bar(self):
-        w = self.bar.winfo_width()
-        if w < 8:
-            return
-        h = max(2, self.bar.winfo_height() or dp(3))
-        if self._fill is None:
-            self._fill = self.bar.create_rectangle(0, 0, w * self._frac, h, fill=self._color, outline="")
-        else:
-            self.bar.coords(self._fill, 0, 0, w * self._frac, h)
-            self.bar.itemconfigure(self._fill, fill=self._color)
 
     def set(self, text, frac=0.0, color=None):
         c = color or self._color
@@ -1261,7 +1404,7 @@ class TelemetryTile(tk.Frame):
         self._text, self._frac, self._color = text, f, c
         self.val.configure(text=text, fg=c if text != "-" else T.DIM)
         self.dot.configure(fg=c)
-        self._redraw_bar()
+        self.bar.set_progress(f, c)
 
 
 class DashboardPage(Page):
@@ -1302,10 +1445,10 @@ class DashboardPage(Page):
         self.hero_title = tk.Label(top_line, text="", bg=T.SURFACE, fg=T.TEXT, font=font(17, "bold", True), anchor="w")
         self.hero_title.pack(side="left")
 
-        ip_pill = tk.Frame(top_line, bg=T.SURFACE2, highlightthickness=1, highlightbackground=T.BORDER)
+        ip_pill = SurfaceBox(top_line, bg=T.SURFACE2, border=T.BORDER, corner=7)
         ip_pill.pack(side="left", padx=(dp(10), dp(6)))
         self.hero_ip = tk.Label(ip_pill, text="", bg=T.SURFACE2, fg=T.ACCENT_HI, font=font(11, "bold", True),
-                                cursor="hand2", padx=dp(8), pady=dp(1))
+                                cursor="hand2", padx=dp(8), pady=dp(2))
         self.hero_ip.pack(side="left")
         self.hero_ip.bind("<Button-1>", lambda e: app.copy(app.rx.netinfo.best_ip(), "Copied IP"))
         Tooltip(self.hero_ip, "Click to copy this PC IP address")
@@ -1346,8 +1489,9 @@ class DashboardPage(Page):
         ctrl_head.pack(side="right")
         mode = app.cfg.data["visualizer_mode"]
         mode = mode if mode in ("spectrum", "pills", "scope") else ("scope" if "osc" in mode else "spectrum")
-        Segmented(ctrl_head, [("spectrum", "Spectrum"), ("pills", "Pill Bars"), ("scope", "Waveform")],
-                  mode, self._viz_mode, bg=T.SURFACE, size=8).pack(side="right")
+        self.viz_seg = Segmented(ctrl_head, [("spectrum", "Spectrum"), ("pills", "Pill Bars"), ("scope", "Waveform")],
+                                 mode, self._viz_mode, bg=T.SURFACE, size=8)
+        self.viz_seg.pack(side="right")
 
         read_row = tk.Frame(lv.body, bg=T.SURFACE)
         read_row.pack(fill="x", pady=(0, dp(4)))
@@ -1412,6 +1556,17 @@ class DashboardPage(Page):
         vcombo.set(app.proc.voice_changer.active_preset)
         vcombo.pack(side="right")
         app.voice_combos.append(vcombo)
+        self.cat_btn = CatPreviewButton(
+            vr,
+            command=app.preview_cat_voice,
+            menu_command=app.show_cat_menu,
+            size=17,
+        )
+        self.cat_tip = Tooltip(
+            self.cat_btn.canvas,
+            "Preview cat voice with current effects (right-click for custom WAV)",
+        )
+        self.sync_cat_preview()
 
         self.gain_row = SettingRow(q.body, app, sm.BY_KEY["gain"], compact=True)
         self.gain_row.pack(fill="x")
@@ -1639,10 +1794,22 @@ class DashboardPage(Page):
         self.app.cfg.data["visualizer_mode"] = mode
         self.app.cfg.save_soon()
 
+    def sync_cat_preview(self):
+        if not hasattr(self, "cat_btn"):
+            return
+        if self.app.cat_preview_visible():
+            if self.cat_btn.winfo_manager() != "pack":
+                self.cat_btn.pack(side="right", padx=(0, dp(6)))
+            self.cat_btn.set_playing(self.app.rx.preview_active)
+        else:
+            self.cat_btn.set_playing(False)
+            self.cat_btn.pack_forget()
+
     def sync(self):
         self.gain_row.refresh()
         self._paint_all_fx()
         self.sync_outputs()
+        self.sync_cat_preview()
 
     def on_show(self):
         self.sync()
@@ -1654,7 +1821,11 @@ class DashboardPage(Page):
         now = time.monotonic()
         dt = min(0.2, now - self.last)
         self.last = now
-        live = rx.state() == "streaming"
+        previewing = bool(rx.preview_active)
+        streaming = rx.state() == "streaming"
+        live = streaming or previewing
+        if hasattr(self, "cat_btn") and self.app.cat_preview_visible():
+            self.cat_btn.set_playing(previewing)
         peak = proc.level_db if live else -80.0
         rms = lin_to_db(proc.level_rms, -80.0) if live else -80.0
         self.peak_s = peak if peak > self.peak_s else max(peak, self.peak_s - 60.0 * dt)
@@ -1670,9 +1841,10 @@ class DashboardPage(Page):
         else:
             self.spectrum.idle()
         if live:
-            text = f"Peak {self.peak_s:5.1f} dBFS  ·  Avg {rms:5.1f} dBFS"
+            prefix = "Preview  \u00b7  " if (previewing and not streaming) else ""
+            text = f"{prefix}Peak {self.peak_s:5.1f} dBFS  \u00b7  Avg {rms:5.1f} dBFS"
             if proc.comp_enabled and proc.gain_reduction_db > 0.3:
-                text += f"  ·  GR {proc.gain_reduction_db:.1f} dB"
+                text += f"  \u00b7  GR {proc.gain_reduction_db:.1f} dB"
         else:
             text = "No signal"
         if text != self._last_read_text:

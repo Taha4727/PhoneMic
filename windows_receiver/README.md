@@ -2,10 +2,18 @@
 > **🤖 100% Made With AI**  
 > This entire receiver engine, GUI, DSP chain, and CLI tool were authored using Artificial Intelligence.
 
-# PhoneMic Receiver v1.4.0 (Windows & Linux)
+# PhoneMic Receiver v1.4.2 (Windows & Linux)
 
 Turn your Android phone into a low-latency PC microphone over **Wi-Fi** or **USB tethering** on **Windows 10/11** and **Linux (Arch Linux / PipeWire)**.
 The wire protocol is unchanged, so the Android app needs no update, and settings from earlier versions are carried over.
+
+---
+
+## What's new in 1.4.2
+
+* **Unified App & Tray Icon**: Updated the receiver executable, installer, window, and system tray icons to match the Android companion app.
+* **Audio Visualizer & UI Stability Fixes**: Fixed segmented button binding crashes on startup, restored switching between audio visualizer types in the receiver, and resolved layout/widget edge cases.
+* **Synced Version (`v1.4.2`)**: Aligns `PhoneMicReceiver`, standalone `phonemic_cli.py`, and the Android companion release.
 
 ---
 

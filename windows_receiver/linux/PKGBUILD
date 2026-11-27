@@ -1,6 +1,6 @@
 # Maintainer: PhoneMic Contributors
 pkgname=phonemic-receiver
-pkgver=1.4.0
+pkgver=1.4.2
 pkgrel=1
 pkgdesc="Turn your Android phone into a low-latency studio microphone over Wi-Fi or USB tethering"
 arch=('any')

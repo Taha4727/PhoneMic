@@ -7,16 +7,29 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Analytics
@@ -27,14 +40,20 @@ import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -44,6 +63,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -52,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.DeviceProfile
+import com.example.HorizontalNavMode
 import com.example.MainTab
 import com.example.PhoneMicViewModel
 import com.example.R
@@ -66,7 +87,6 @@ fun PhoneMicScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val visualizerSnapshot by viewModel.visualizerSnapshot.collectAsState()
     val context = LocalContext.current
     val colors = PhoneMicTheme.colors
 
@@ -146,18 +166,134 @@ fun PhoneMicScreen(
         uiState.availableMics.firstOrNull { it.id == uiState.preferredMicId }?.name ?: "System Default"
     }
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        containerColor = colors.background,
-        bottomBar = {
-            NavigationBar(
-                containerColor = colors.bottomBarSurface,
-                contentColor = colors.textPrimary,
-                tonalElevation = 0.dp,
-                windowInsets = WindowInsets.navigationBars,
-                modifier = Modifier.testTag("bottom_nav_bar")
-            ) {
-                    val itemColors = NavigationBarItemDefaults.colors(
+    val onSelectTab: (MainTab) -> Unit = remember(viewModel) { { tab -> viewModel.setActiveTab(tab) } }
+    val onSelectStatus: () -> Unit = remember(viewModel) { { viewModel.setActiveTab(MainTab.STATUS) } }
+    val onSelectHome: () -> Unit = remember(viewModel) { { viewModel.setActiveTab(MainTab.HOME) } }
+    val onSelectSettings: () -> Unit = remember(viewModel) { { viewModel.setActiveTab(MainTab.SETTINGS) } }
+    val onToggleDarkMode: () -> Unit = remember(viewModel) { { viewModel.toggleDarkMode() } }
+    val onRequestMicPermission: () -> Unit = remember(micPermissionLauncher) {
+        { micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+    }
+    val onQrCodeClick: () -> Unit = remember(context, viewModel, cameraPermissionLauncher) {
+        {
+            val hasCam = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+            if (hasCam) {
+                viewModel.setQrScannerVisible(true)
+            } else {
+                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        }
+    }
+    val onStartClick: () -> Unit = remember(context, viewModel, micPermissionLauncher, notificationPermissionLauncher) {
+        { handleStartStream() }
+    }
+    val onStopClick: () -> Unit = remember(context, viewModel) { { viewModel.stopStreaming(context) } }
+    val onPauseClick: () -> Unit = remember(viewModel) { { viewModel.togglePause() } }
+    val onScanClick: () -> Unit = remember(context, viewModel) { { viewModel.scanForPc(context) } }
+    val onOverlayToggle: (Boolean) -> Unit = remember(context, viewModel) { { viewModel.toggleFloatingOverlay(context, it) } }
+    val onShareCli: () -> Unit = remember(context) { { ShareHelper.shareCliReceiver(context) } }
+
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val isHorizontal = maxWidth > maxHeight && maxWidth >= 560.dp
+        val useSideRail = isHorizontal && uiState.horizontalNavMode == HorizontalNavMode.SIDE_RAIL
+        val maxContentWidth = if (isHorizontal && uiState.activeTab != MainTab.SETTINGS) 1200.dp else 640.dp
+
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = colors.background,
+            bottomBar = {
+                if (!useSideRail) {
+                    if (isHorizontal) {
+                        CompactHorizontalBottomBar(
+                            activeTab = uiState.activeTab,
+                            onSelectTab = onSelectTab
+                        )
+                    } else {
+                        NavigationBar(
+                            containerColor = colors.bottomBarSurface,
+                            contentColor = colors.textPrimary,
+                            tonalElevation = 0.dp,
+                            windowInsets = WindowInsets.navigationBars,
+                            modifier = Modifier.testTag("bottom_nav_bar")
+                        ) {
+                            val itemColors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = colors.accent,
+                                selectedTextColor = colors.accent,
+                                indicatorColor = colors.accentSoftBg,
+                                unselectedIconColor = colors.textSecondary,
+                                unselectedTextColor = colors.textSecondary
+                            )
+
+                            NavigationBarItem(
+                                selected = uiState.activeTab == MainTab.STATUS,
+                                onClick = onSelectStatus,
+                                icon = {
+                                    Icon(
+                                        imageVector = if (uiState.activeTab == MainTab.STATUS) Icons.Filled.Analytics else Icons.Outlined.Analytics,
+                                        contentDescription = stringResource(R.string.nav_status)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = stringResource(R.string.nav_status),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (uiState.activeTab == MainTab.STATUS) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                colors = itemColors,
+                                modifier = Modifier.testTag("nav_tab_status")
+                            )
+
+                            NavigationBarItem(
+                                selected = uiState.activeTab == MainTab.HOME,
+                                onClick = onSelectHome,
+                                icon = {
+                                    Icon(
+                                        imageVector = if (uiState.activeTab == MainTab.HOME) Icons.Filled.Mic else Icons.Outlined.Mic,
+                                        contentDescription = stringResource(R.string.nav_home)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = stringResource(R.string.nav_home),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (uiState.activeTab == MainTab.HOME) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                colors = itemColors,
+                                modifier = Modifier.testTag("nav_tab_home")
+                            )
+
+                            NavigationBarItem(
+                                selected = uiState.activeTab == MainTab.SETTINGS,
+                                onClick = onSelectSettings,
+                                icon = {
+                                    Icon(
+                                        imageVector = if (uiState.activeTab == MainTab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
+                                        contentDescription = stringResource(R.string.nav_settings)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = stringResource(R.string.nav_settings),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (uiState.activeTab == MainTab.SETTINGS) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                colors = itemColors,
+                                modifier = Modifier.testTag("open_settings_button")
+                            )
+                        }
+                    }
+                }
+            }
+        ) { innerPadding ->
+            Row(modifier = Modifier.fillMaxSize()) {
+                if (useSideRail) {
+                    val railColors = NavigationRailItemDefaults.colors(
                         selectedIconColor = colors.accent,
                         selectedTextColor = colors.accent,
                         indicatorColor = colors.accentSoftBg,
@@ -165,145 +301,160 @@ fun PhoneMicScreen(
                         unselectedTextColor = colors.textSecondary
                     )
 
-                    NavigationBarItem(
-                        selected = uiState.activeTab == MainTab.STATUS,
-                        onClick = { viewModel.setActiveTab(MainTab.STATUS) },
-                        icon = {
-                            Icon(
-                                imageVector = if (uiState.activeTab == MainTab.STATUS) Icons.Filled.Analytics else Icons.Outlined.Analytics,
-                                contentDescription = stringResource(R.string.nav_status)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = stringResource(R.string.nav_status),
-                                fontSize = 11.sp,
-                                fontWeight = if (uiState.activeTab == MainTab.STATUS) FontWeight.Bold else FontWeight.Medium
-                            )
-                        },
-                        colors = itemColors,
-                        modifier = Modifier.testTag("nav_tab_status")
-                    )
+                    NavigationRail(
+                        containerColor = colors.bottomBarSurface,
+                        contentColor = colors.textPrimary,
+                        windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start),
+                        modifier = Modifier.testTag("nav_rail")
+                    ) {
+                        Spacer(modifier = Modifier.weight(1f))
 
-                    NavigationBarItem(
-                        selected = uiState.activeTab == MainTab.HOME,
-                        onClick = { viewModel.setActiveTab(MainTab.HOME) },
-                        icon = {
-                            Icon(
-                                imageVector = if (uiState.activeTab == MainTab.HOME) Icons.Filled.Mic else Icons.Outlined.Mic,
-                                contentDescription = stringResource(R.string.nav_home)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = stringResource(R.string.nav_home),
-                                fontSize = 11.sp,
-                                fontWeight = if (uiState.activeTab == MainTab.HOME) FontWeight.Bold else FontWeight.Medium
-                            )
-                        },
-                        colors = itemColors,
-                        modifier = Modifier.testTag("nav_tab_home")
-                    )
+                        NavigationRailItem(
+                            selected = uiState.activeTab == MainTab.STATUS,
+                            onClick = onSelectStatus,
+                            icon = {
+                                Icon(
+                                    imageVector = if (uiState.activeTab == MainTab.STATUS) Icons.Filled.Analytics else Icons.Outlined.Analytics,
+                                    contentDescription = stringResource(R.string.nav_status)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(R.string.nav_status),
+                                    fontSize = 11.sp,
+                                    fontWeight = if (uiState.activeTab == MainTab.STATUS) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            colors = railColors,
+                            modifier = Modifier.testTag("nav_tab_status")
+                        )
 
-                    NavigationBarItem(
-                        selected = uiState.activeTab == MainTab.SETTINGS,
-                        onClick = { viewModel.setActiveTab(MainTab.SETTINGS) },
-                        icon = {
-                            Icon(
-                                imageVector = if (uiState.activeTab == MainTab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
-                                contentDescription = stringResource(R.string.nav_settings)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = stringResource(R.string.nav_settings),
-                                fontSize = 11.sp,
-                                fontWeight = if (uiState.activeTab == MainTab.SETTINGS) FontWeight.Bold else FontWeight.Medium
-                            )
-                        },
-                        colors = itemColors,
-                        modifier = Modifier.testTag("open_settings_button")
-                    )
+                        NavigationRailItem(
+                            selected = uiState.activeTab == MainTab.HOME,
+                            onClick = onSelectHome,
+                            icon = {
+                                Icon(
+                                    imageVector = if (uiState.activeTab == MainTab.HOME) Icons.Filled.Mic else Icons.Outlined.Mic,
+                                    contentDescription = stringResource(R.string.nav_home)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(R.string.nav_home),
+                                    fontSize = 11.sp,
+                                    fontWeight = if (uiState.activeTab == MainTab.HOME) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            colors = railColors,
+                            modifier = Modifier.testTag("nav_tab_home")
+                        )
+
+                        NavigationRailItem(
+                            selected = uiState.activeTab == MainTab.SETTINGS,
+                            onClick = onSelectSettings,
+                            icon = {
+                                Icon(
+                                    imageVector = if (uiState.activeTab == MainTab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
+                                    contentDescription = stringResource(R.string.nav_settings)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(R.string.nav_settings),
+                                    fontSize = 11.sp,
+                                    fontWeight = if (uiState.activeTab == MainTab.SETTINGS) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            colors = railColors,
+                            modifier = Modifier.testTag("open_settings_button")
+                        )
+
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+
+                    VerticalDivider(color = colors.border)
                 }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .padding(bottom = innerPadding.calculateBottomPadding()),
-            contentAlignment = Alignment.TopCenter
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .widthIn(max = 640.dp)
-            ) {
-                when (uiState.activeTab) {
-                    MainTab.STATUS -> StatusScreen(
-                        uiState = uiState,
-                        selectedMicName = selectedMicName,
-                        onBatteryDismissOrGranted = { viewModel.checkBatteryOptimization() }
-                    )
 
-                    MainTab.HOME -> HomeScreen(
-                        uiState = uiState,
-                        visualizerSnapshot = visualizerSnapshot,
-                        isValidIp = viewModel.isValidIp(uiState.ip),
-                        isValidPort = viewModel.isValidPort(uiState.port),
-                        onToggleTheme = { viewModel.toggleDarkMode() },
-                        onRequestMicPermission = {
-                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                        },
-                        onConnectionModeSelected = { mode -> viewModel.setConnectionMode(mode) },
-                        onQrCodeClick = {
-                            val hasCam = ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.CAMERA
-                            ) == PackageManager.PERMISSION_GRANTED
-                            if (hasCam) {
-                                viewModel.setQrScannerVisible(true)
-                            } else {
-                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                            }
-                        },
-                        onIpChange = { viewModel.setIp(it) },
-                        onPortChange = { viewModel.setPort(it) },
-                        onScanClick = { viewModel.scanForPc(context) },
-                        onTransportModeSelected = { viewModel.setTransportMode(it) },
-                        onPttToggleChange = { viewModel.setPushToTalkEnabled(it) },
-                        onPttPressChange = { viewModel.setPttPressed(it) },
-                        onStartClick = { handleStartStream() },
-                        onStopClick = { viewModel.stopStreaming(context) },
-                        onPauseClick = { viewModel.togglePause() }
+                val contentInsetsModifier = if (useSideRail) {
+                    Modifier.windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Bottom + WindowInsetsSides.End)
                     )
+                } else {
+                    Modifier
+                        .windowInsetsPadding(
+                            WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+                        )
+                        .padding(bottom = innerPadding.calculateBottomPadding())
+                }
 
-                    MainTab.SETTINGS -> SettingsScreen(
-                        uiState = uiState,
-                        onBackToHome = { viewModel.setActiveTab(MainTab.HOME) },
-                        onAutoStartChange = { viewModel.setAutoStartStreaming(it) },
-                        onPushToTalkChange = { viewModel.setPushToTalkEnabled(it) },
-                        onAutoReconnectChange = { viewModel.setAutoReconnectEnabled(it) },
-                        onKeepScreenAwakeChange = { viewModel.setKeepScreenAwake(it) },
-                        onOverlayToggle = { viewModel.toggleFloatingOverlay(context, it) },
-                        onTransportModeChange = { viewModel.setTransportMode(it) },
-                        onRefreshMics = { viewModel.refreshAvailableMics() },
-                        onSelectMicDevice = { viewModel.setPreferredMicDevice(it) },
-                        onSelectAudioSource = { viewModel.setMicMode(it) },
-                        onSelectSampleRate = { viewModel.setSampleRate(it) },
-                        onSelectAudioFormat = { viewModel.setAudioFormat(it) },
-                        onSelectChannels = { viewModel.setChannels(it) },
-                        onGainChange = { viewModel.setGain(it) },
-                        onDarkModeChange = { viewModel.setDarkMode(it) },
-                        onOledBlackChange = { viewModel.setOledBlackEnabled(it) },
-                        onPaletteStyleChange = { viewModel.setPaletteStyle(it) },
-                        onThemeColorPresetChange = { viewModel.setThemeColorPreset(it) },
-                        onCustomThemeColorChange = { viewModel.setCustomThemeColor(it) },
-                        onVisualizerEnabledChange = { viewModel.setVisualizerEnabled(it) },
-                        onVisualizerStyleChange = { viewModel.setVisualizerStyle(it) },
-                        onOpenGuide = { viewModel.setGuideDialogVisible(true) },
-                        onShareCli = { ShareHelper.shareCliReceiver(context) }
-                    )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .then(contentInsetsModifier),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .widthIn(max = maxContentWidth)
+                    ) {
+                        when (uiState.activeTab) {
+                            MainTab.STATUS -> StatusScreen(
+                                uiState = uiState,
+                                selectedMicName = selectedMicName,
+                                onBatteryDismissOrGranted = remember(viewModel) { { viewModel.checkBatteryOptimization() } }
+                            )
+
+                            MainTab.HOME -> HomeScreen(
+                                uiState = uiState,
+                                visualizerSnapshotFlow = viewModel.visualizerSnapshot,
+                                isValidIp = remember(uiState.ip) { viewModel.isValidIp(uiState.ip) },
+                                isValidPort = remember(uiState.port) { viewModel.isValidPort(uiState.port) },
+                                onToggleTheme = onToggleDarkMode,
+                                onRequestMicPermission = onRequestMicPermission,
+                                onConnectionModeSelected = remember(viewModel) { { mode -> viewModel.setConnectionMode(mode) } },
+                                onQrCodeClick = onQrCodeClick,
+                                onIpChange = remember(viewModel) { { viewModel.setIp(it) } },
+                                onPortChange = remember(viewModel) { { viewModel.setPort(it) } },
+                                onScanClick = onScanClick,
+                                onTransportModeSelected = remember(viewModel) { { viewModel.setTransportMode(it) } },
+                                onPttToggleChange = remember(viewModel) { { viewModel.setPushToTalkEnabled(it) } },
+                                onPttPressChange = remember(viewModel) { { viewModel.setPttPressed(it) } },
+                                onVisualizerEnabledChange = remember(viewModel) { { viewModel.setVisualizerEnabled(it) } },
+                                onStartClick = onStartClick,
+                                onStopClick = onStopClick,
+                                onPauseClick = onPauseClick
+                            )
+
+                            MainTab.SETTINGS -> SettingsScreen(
+                                uiState = uiState,
+                                onBackToHome = onSelectHome,
+                                onAutoStartChange = remember(viewModel) { { viewModel.setAutoStartStreaming(it) } },
+                                onPushToTalkChange = remember(viewModel) { { viewModel.setPushToTalkEnabled(it) } },
+                                onAutoReconnectChange = remember(viewModel) { { viewModel.setAutoReconnectEnabled(it) } },
+                                onKeepScreenAwakeChange = remember(viewModel) { { viewModel.setKeepScreenAwake(it) } },
+                                onOverlayToggle = onOverlayToggle,
+                                onTransportModeChange = remember(viewModel) { { viewModel.setTransportMode(it) } },
+                                onRefreshMics = remember(viewModel) { { viewModel.refreshAvailableMics() } },
+                                onSelectMicDevice = remember(viewModel) { { viewModel.setPreferredMicDevice(it) } },
+                                onSelectAudioSource = remember(viewModel) { { viewModel.setMicMode(it) } },
+                                onSelectSampleRate = remember(viewModel) { { viewModel.setSampleRate(it) } },
+                                onSelectAudioFormat = remember(viewModel) { { viewModel.setAudioFormat(it) } },
+                                onSelectChannels = remember(viewModel) { { viewModel.setChannels(it) } },
+                                onGainChange = remember(viewModel) { { viewModel.setGain(it) } },
+                                onDarkModeChange = remember(viewModel) { { viewModel.setDarkMode(it) } },
+                                onOledBlackChange = remember(viewModel) { { viewModel.setOledBlackEnabled(it) } },
+                                onPaletteStyleChange = remember(viewModel) { { viewModel.setPaletteStyle(it) } },
+                                onCustomThemeColorChange = remember(viewModel) { { viewModel.setCustomThemeColor(it) } },
+                                onHorizontalNavModeChange = remember(viewModel) { { viewModel.setHorizontalNavMode(it) } },
+                                onVisualizerEnabledChange = remember(viewModel) { { viewModel.setVisualizerEnabled(it) } },
+                                onVisualizerStyleChange = remember(viewModel) { { viewModel.setVisualizerStyle(it) } },
+                                onOpenGuide = remember(viewModel) { { viewModel.setGuideDialogVisible(true) } },
+                                onShareCli = onShareCli
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -380,5 +531,96 @@ fun PhoneMicScreen(
                 ).show()
             }
         )
+    }
+}
+
+@Composable
+private fun CompactHorizontalBottomBar(
+    activeTab: MainTab,
+    onSelectTab: (MainTab) -> Unit
+) {
+    val colors = PhoneMicTheme.colors
+    Surface(
+        color = colors.bottomBarSurface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("bottom_nav_bar")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+        ) {
+            HorizontalDivider(color = colors.border)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val tabs = remember {
+                    listOf(
+                        Triple(MainTab.STATUS, R.string.nav_status, "nav_tab_status"),
+                        Triple(MainTab.HOME, R.string.nav_home, "nav_tab_home"),
+                        Triple(MainTab.SETTINGS, R.string.nav_settings, "open_settings_button")
+                    )
+                }
+
+                tabs.forEach { (tab, labelRes, tag) ->
+                    val selected = activeTab == tab
+                    val icon = when (tab) {
+                        MainTab.STATUS -> if (selected) Icons.Filled.Analytics else Icons.Outlined.Analytics
+                        MainTab.HOME -> if (selected) Icons.Filled.Mic else Icons.Outlined.Mic
+                        MainTab.SETTINGS -> if (selected) Icons.Filled.Settings else Icons.Outlined.Settings
+                    }
+                    val contentColor = if (selected) colors.accent else colors.textSecondary
+
+                    Surface(
+                        onClick = { onSelectTab(tab) },
+                        color = Color.Transparent,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .widthIn(max = 200.dp)
+                            .fillMaxHeight()
+                            .testTag(tag)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(width = 44.dp, height = 26.dp)
+                                    .background(
+                                        color = if (selected) colors.accentSoftBg else Color.Transparent,
+                                        shape = CircleShape
+                                    )
+                                    .testTag("nav_pill_${tab.name.lowercase()}")
+                            ) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = stringResource(labelRes),
+                                    tint = contentColor,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(labelRes),
+                                color = contentColor,
+                                fontSize = 12.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }

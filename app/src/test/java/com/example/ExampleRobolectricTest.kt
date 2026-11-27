@@ -17,7 +17,6 @@ import com.example.audio.VisualizerStyle
 import com.example.ui.screens.PhoneMicScreen
 import com.example.ui.theme.AppPaletteStyle
 import com.example.ui.theme.PhoneMicTheme
-import com.example.ui.theme.ThemeColorPreset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -45,7 +44,7 @@ class ExampleRobolectricTest {
   fun `bundled cli receiver matches app version`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val script = context.assets.open("phonemic_cli.py").bufferedReader().use { it.readText() }
-    assertTrue("Expected bundled phonemic_cli.py to declare VERSION = \"1.4.0\"", script.contains("VERSION = \"1.4.0\""))
+    assertTrue("Expected bundled phonemic_cli.py to declare VERSION = \"1.4.2\"", script.contains("VERSION = \"1.4.2\""))
     assertTrue("Expected bundled phonemic_cli.py to support PM04", script.contains("PM04"))
   }
 
@@ -69,6 +68,7 @@ class ExampleRobolectricTest {
     vm1.setOledBlackEnabled(true)
     vm1.setPaletteStyle(AppPaletteStyle.VIBRANT)
     vm1.setCustomThemeColor(0xFFEC4899L)
+    vm1.setHorizontalNavMode(HorizontalNavMode.SIDE_RAIL)
 
     val vm2 = PhoneMicViewModel(app)
     val state = vm2.uiState.value
@@ -83,9 +83,9 @@ class ExampleRobolectricTest {
     assertEquals(VisualizerStyle.SPECTRUM_BARS, state.visualizerStyle)
     assertFalse(state.isDarkMode)
     assertTrue(state.oledBlackEnabled)
-    assertEquals(AppPaletteStyle.VIBRANT, state.paletteStyle)
-    assertEquals(ThemeColorPreset.CUSTOM, state.themeColorPreset)
+    assertEquals(AppPaletteStyle.CUSTOM, state.paletteStyle)
     assertEquals(0xFFEC4899L, state.customThemeColorArgb)
+    assertEquals(HorizontalNavMode.SIDE_RAIL, state.horizontalNavMode)
   }
 
   @Test
@@ -101,7 +101,6 @@ class ExampleRobolectricTest {
         isDarkMode = uiState.isDarkMode,
         oledBlackEnabled = uiState.oledBlackEnabled,
         paletteStyle = uiState.paletteStyle,
-        themeColorPreset = uiState.themeColorPreset,
         customThemeColorArgb = uiState.customThemeColorArgb
       ) {
         PhoneMicScreen(viewModel = vm)
@@ -169,7 +168,6 @@ class ExampleRobolectricTest {
         isDarkMode = uiState.isDarkMode,
         oledBlackEnabled = uiState.oledBlackEnabled,
         paletteStyle = uiState.paletteStyle,
-        themeColorPreset = uiState.themeColorPreset,
         customThemeColorArgb = uiState.customThemeColorArgb
       ) {
         PhoneMicScreen(viewModel = vm)
@@ -204,7 +202,6 @@ class ExampleRobolectricTest {
         isDarkMode = uiState.isDarkMode,
         oledBlackEnabled = uiState.oledBlackEnabled,
         paletteStyle = uiState.paletteStyle,
-        themeColorPreset = uiState.themeColorPreset,
         customThemeColorArgb = uiState.customThemeColorArgb
       ) {
         PhoneMicScreen(viewModel = vm)
@@ -240,35 +237,43 @@ class ExampleRobolectricTest {
     // Select Appearance options via Switches & Dropdowns
     composeTestRule.onNodeWithTag("setting_oled_colors").performScrollTo().performClick()
 
+    composeTestRule.onNodeWithTag("dropdown_theme_color").assertDoesNotExist()
+
     composeTestRule.onNodeWithTag("dropdown_palette_style").performScrollTo().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("palette_style_VIBRANT").performClick()
-
-    composeTestRule.onNodeWithTag("dropdown_theme_color").performScrollTo().performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("theme_color_EMERALD").performClick()
-    composeTestRule.waitForIdle()
-    assertEquals(ThemeColorPreset.EMERALD, vm.uiState.value.themeColorPreset)
+    assertEquals(AppPaletteStyle.VIBRANT, vm.uiState.value.paletteStyle)
 
-    // Open Custom Theme Color Picker Dialog, select a swatch, and apply
-    composeTestRule.onNodeWithTag("open_color_picker_button").performScrollTo().performClick()
+    // Open Custom Palette Color Picker Dialog via Palette Style, select a swatch, and apply
+    composeTestRule.onNodeWithTag("dropdown_palette_style").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("palette_style_CUSTOM").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("custom_color_preview").assertIsDisplayed()
     composeTestRule.onNodeWithTag("color_swatch_#F43F5E").performClick()
     composeTestRule.onNodeWithTag("custom_color_apply_button").performClick()
     composeTestRule.waitForIdle()
 
-    assertEquals(ThemeColorPreset.CUSTOM, vm.uiState.value.themeColorPreset)
+    assertEquals(AppPaletteStyle.CUSTOM, vm.uiState.value.paletteStyle)
     assertEquals(0xFFF43F5EL, vm.uiState.value.customThemeColorArgb)
 
     // Enter exact custom hex code directly in Appearance card field
     composeTestRule.onNodeWithTag("custom_color_hex_input").performScrollTo().performTextReplacement("#FF5500")
     composeTestRule.waitForIdle()
 
-    assertEquals(ThemeColorPreset.CUSTOM, vm.uiState.value.themeColorPreset)
+    assertEquals(AppPaletteStyle.CUSTOM, vm.uiState.value.paletteStyle)
     assertEquals(0xFFFF5500L, vm.uiState.value.customThemeColorArgb)
 
+    composeTestRule.onNodeWithTag("open_color_picker_button").assertExists()
     composeTestRule.onNodeWithTag("setting_bottom_bar_border").assertDoesNotExist()
+
+    // Select Side Rail for Horizontal Navigation
+    composeTestRule.onNodeWithTag("dropdown_horizontal_nav").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("horizontal_nav_SIDE_RAIL").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(HorizontalNavMode.SIDE_RAIL, vm.uiState.value.horizontalNavMode)
 
     composeTestRule.onNodeWithTag("dropdown_visualizer_style").performScrollTo().performClick()
     composeTestRule.waitForIdle()
@@ -279,16 +284,152 @@ class ExampleRobolectricTest {
     assertEquals(AudioFormatOption.PCM_8BIT, vm.uiState.value.audioFormat)
     assertEquals(2, vm.uiState.value.channels)
     assertEquals(VisualizerStyle.CIRCULAR_PULSE, vm.uiState.value.visualizerStyle)
-    assertEquals(AppPaletteStyle.VIBRANT, vm.uiState.value.paletteStyle)
+    assertEquals(AppPaletteStyle.CUSTOM, vm.uiState.value.paletteStyle)
     assertTrue(vm.uiState.value.oledBlackEnabled)
     assertTrue(vm.uiState.value.pushToTalkEnabled)
 
     // Scroll to About section to confirm version readout is present
-    composeTestRule.onNodeWithText("v1.4.0 (Build 5)").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("v1.4.2 (Build 6)").performScrollTo().assertIsDisplayed()
 
     // Navigate back to Home and verify updated visualizer canvas renders
     composeTestRule.onNodeWithTag("settings_back_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("visualizer_canvas_CIRCULAR_PULSE").assertExists()
+  }
+
+  @Test
+  @Config(qualifiers = "w840dp-h411dp")
+  fun `horizontal home splits section 2 and visualizer 50 50 and expands when hidden`() {
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    app.getSharedPreferences("PhoneMicSettings", Context.MODE_PRIVATE).edit().clear().commit()
+    val vm = PhoneMicViewModel(app)
+
+    composeTestRule.setContent {
+      val uiState by vm.uiState.collectAsState()
+      PhoneMicTheme(
+        isDarkMode = uiState.isDarkMode,
+        oledBlackEnabled = uiState.oledBlackEnabled,
+        paletteStyle = uiState.paletteStyle,
+        customThemeColorArgb = uiState.customThemeColorArgb
+      ) {
+        PhoneMicScreen(viewModel = vm)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Bottom NavigationBar is the default in horizontal mode and stays compact vertically
+    assertEquals(HorizontalNavMode.BOTTOM_BAR, vm.uiState.value.horizontalNavMode)
+    composeTestRule.onNodeWithTag("bottom_nav_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("nav_rail").assertDoesNotExist()
+    val bottomNavBounds = composeTestRule.onNodeWithTag("bottom_nav_bar").fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "Expected compact horizontal bottom nav bar (height=${bottomNavBounds.height} px <= 56 px)",
+      bottomNavBounds.height <= 56f
+    )
+    val homeTabBounds = composeTestRule.onNodeWithTag("nav_tab_home").fetchSemanticsNode().boundsInRoot
+    val homePillBounds = composeTestRule.onNodeWithTag("nav_pill_home", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+    assertTrue("Expected nav tab height >= 48 px (got ${homeTabBounds.height})", homeTabBounds.height >= 48f)
+    assertTrue(
+      "Expected compact icon-only pill width (${homePillBounds.width} px <= 52 px), much narrower than tab (${homeTabBounds.width} px)",
+      homePillBounds.width <= 52f && homePillBounds.width < homeTabBounds.width * 0.5f
+    )
+
+    // Full-width top bar above 50/50 split workspace
+    composeTestRule.onNodeWithTag("home_top_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("home_horizontal_split").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("home_section_controls").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("audio_visualizer_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("start_streaming_button").assertIsDisplayed()
+
+    // Circular Pulse style renders cleanly in horizontal split
+    vm.setVisualizerStyle(VisualizerStyle.CIRCULAR_PULSE)
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("visualizer_canvas_CIRCULAR_PULSE").assertIsDisplayed()
+
+    val topBarBounds = composeTestRule.onNodeWithTag("home_top_bar").fetchSemanticsNode().boundsInRoot
+    val controlsBounds = composeTestRule.onNodeWithTag("home_section_controls").fetchSemanticsNode().boundsInRoot
+    val visualizerBounds = composeTestRule.onNodeWithTag("audio_visualizer_card").fetchSemanticsNode().boundsInRoot
+
+    assertTrue("Expected Section 1 full-width top bar above split", topBarBounds.bottom <= controlsBounds.top + 2f)
+    assertTrue("Expected Section 2 on the left of Visualizer", controlsBounds.right <= visualizerBounds.left + 2f)
+    val widthDiff = kotlin.math.abs(controlsBounds.width - visualizerBounds.width)
+    assertTrue("Expected 50/50 horizontal split (diff=$widthDiff px)", widthDiff <= 20f)
+
+    // Hide visualizer via small header button; Section 2 expands and splits into two compact columns
+    composeTestRule.onNodeWithTag("visualizer_hide_button").performClick()
+    composeTestRule.waitForIdle()
+
+    assertFalse(vm.uiState.value.visualizerEnabled)
+    composeTestRule.onNodeWithTag("audio_visualizer_card").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("visualizer_show_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("home_controls_two_column").assertIsDisplayed()
+
+    val expandedBounds = composeTestRule.onNodeWithTag("home_section_controls").fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "Expected Section 2 (${expandedBounds.width} px) to expand when visualizer hidden (${controlsBounds.width} px)",
+      expandedBounds.width >= controlsBounds.width * 1.6f
+    )
+
+    val ipBounds = composeTestRule.onNodeWithTag("ip_address_input").fetchSemanticsNode().boundsInRoot
+    val startBounds = composeTestRule.onNodeWithTag("start_streaming_button").fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "Expected IP field on left (${ipBounds.right}) of Start button (${startBounds.left}) in two-column mode",
+      ipBounds.right <= startBounds.left + 2f
+    )
+    assertTrue(
+      "Expected IP field width (${ipBounds.width} px) to stay compact inside two-column Section 2 (${expandedBounds.width} px)",
+      ipBounds.width < expandedBounds.width * 0.6f
+    )
+
+    // Restore visualizer directly from Home top bar
+    composeTestRule.onNodeWithTag("visualizer_show_button").performClick()
+    composeTestRule.waitForIdle()
+
+    assertTrue(vm.uiState.value.visualizerEnabled)
+    composeTestRule.onNodeWithTag("audio_visualizer_card").assertIsDisplayed()
+  }
+
+  @Test
+  @Config(qualifiers = "w840dp-h411dp")
+  fun `horizontal status uses two columns and side rail setting switches navigation`() {
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    app.getSharedPreferences("PhoneMicSettings", Context.MODE_PRIVATE).edit().clear().commit()
+    val vm = PhoneMicViewModel(app)
+    vm.setHorizontalNavMode(HorizontalNavMode.SIDE_RAIL)
+
+    composeTestRule.setContent {
+      val uiState by vm.uiState.collectAsState()
+      PhoneMicTheme(
+        isDarkMode = uiState.isDarkMode,
+        oledBlackEnabled = uiState.oledBlackEnabled,
+        paletteStyle = uiState.paletteStyle,
+        customThemeColorArgb = uiState.customThemeColorArgb
+      ) {
+        PhoneMicScreen(viewModel = vm)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Side Rail active instead of Bottom Bar
+    composeTestRule.onNodeWithTag("nav_rail").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bottom_nav_bar").assertDoesNotExist()
+
+    // Status tab shows 2 balanced side-by-side columns
+    composeTestRule.onNodeWithTag("nav_tab_status").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("status_horizontal_columns").assertIsDisplayed()
+    val liveBounds = composeTestRule.onNodeWithTag("status_section_live_stream").fetchSemanticsNode().boundsInRoot
+    val audioBounds = composeTestRule.onNodeWithTag("status_section_audio").fetchSemanticsNode().boundsInRoot
+    assertTrue("Expected Live Stream left of Audio in horizontal Status", liveBounds.right <= audioBounds.left + 2f)
+
+    // Settings tab stays focused single column capped cleanly
+    composeTestRule.onNodeWithTag("open_settings_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("settings_screen").assertIsDisplayed()
+    val settingsBounds = composeTestRule.onNodeWithTag("settings_screen").fetchSemanticsNode().boundsInRoot
+    val rootBounds = composeTestRule.onNodeWithTag("nav_rail").fetchSemanticsNode().boundsInRoot
+    assertTrue("Expected Settings to remain to the right of Side Rail", settingsBounds.left >= rootBounds.right - 2f)
   }
 }

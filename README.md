@@ -148,7 +148,7 @@ Releases are triggered **manually on-demand** from GitHub Actions:
 1. In your GitHub repository, go to the **Actions** tab.
 2. Select **"Manual Release (APK, Windows & Linux Receiver)"** from the left sidebar.
 3. Click **"Run workflow"**.
-4. (Optional) Enter your desired release tag (e.g. `v1.4.0`) and title.
+4. (Optional) Enter your desired release tag (e.g. `v1.4.2`) and title.
 5. Click the green **"Run workflow"** button.
 6. GitHub will build the Android APK, Windows ZIP, and Linux tarball and publish them directly to your repository's **Releases** page!
 

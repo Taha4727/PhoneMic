@@ -45,7 +45,6 @@ class MainActivity : ComponentActivity() {
                 isDarkMode = uiState.isDarkMode,
                 oledBlackEnabled = uiState.oledBlackEnabled,
                 paletteStyle = uiState.paletteStyle,
-                themeColorPreset = uiState.themeColorPreset,
                 customThemeColorArgb = uiState.customThemeColorArgb
             ) {
                 PhoneMicScreen(viewModel = viewModel)

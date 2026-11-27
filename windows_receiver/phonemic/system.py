@@ -414,7 +414,7 @@ def configure_firewall(port):
         return True, "Not on Windows - nothing to do."
     bat = os.path.join(tempfile.gettempdir(), "phonemic_firewall.bat")
     try:
-        with open(bat, "w", encoding="ascii", errors="replace") as f:
+        with open(bat, "w", encoding=_oem_encoding(), errors="replace") as f:
             f.write("@echo off\r\n" + "\r\n".join(_firewall_commands(port)) + "\r\n")
     except Exception as e:
         return False, f"Could not write helper script: {e}"

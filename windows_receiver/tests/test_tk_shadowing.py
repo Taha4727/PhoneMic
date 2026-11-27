@@ -56,8 +56,8 @@ CTK_INTERNALS = {
 }
 
 WIDGET_BASES = {
-    "_ButtonBase", "_ToggleBase", "_ComboBase", "_FrameBase", "_ScrollBase",
-    "_SearchBase", "_MinimalBase", "Page",
+    "_ButtonBase", "_ToggleBase", "_EntryBase", "_ProgressBase",
+    "_ComboBase", "_FrameBase", "_ScrollBase", "_SearchBase", "_MinimalBase", "Page",
 }
 
 

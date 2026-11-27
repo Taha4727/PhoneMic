@@ -150,9 +150,12 @@
     <string name="setting_oled_colors_title">OLED Colors</string>
     <string name="setting_oled_colors_desc">Use pure #000000 black background in Dark mode</string>
     <string name="setting_palette_style_title">Palette Style</string>
-    <string name="setting_theme_color_title">Theme Color</string>
-    <string name="setting_theme_color_desc">Choose a signature accent color or open the custom color picker</string>
+    <string name="setting_palette_style_desc">Choose a surface mood &amp; accent palette, or pick a custom color</string>
     <string name="setting_custom_color_action">Customize Color</string>
-    <string name="custom_color_dialog_title">Custom Theme Color</string>
+    <string name="custom_color_dialog_title">Custom Palette Color</string>
     <string name="custom_color_apply">Apply Color</string>
+    <string name="setting_horizontal_nav_title">Horizontal Navigation</string>
+    <string name="setting_horizontal_nav_desc">Choose bottom bar (default) or side rail when in horizontal mode</string>
+    <string name="hide_visualizer_cd">Hide audio visualizer</string>
+    <string name="show_visualizer_cd">Show audio visualizer</string>
 </resources>

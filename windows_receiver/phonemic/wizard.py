@@ -6,7 +6,7 @@ import tkinter as tk
 from . import system, virtual_mic
 from .const import VB_CABLE_URL
 from .dsp import lin_to_db
-from .widgets import T, dp, font, autowrap, FlatButton, Combo, Card, LevelMeter
+from .widgets import T, dp, font, autowrap, FlatButton, Combo, Card, LevelMeter, ProgressBar, SurfaceBox, PillBadge
 from .gui import Page
 from .qr import generate_qr_matrix
 
@@ -39,10 +39,14 @@ class WizardPage(Page):
         b.bind("<Configure>", lambda e: self._schedule_fit(e.width), add="+")
         body = self.card.body
 
-        self.progress = tk.Canvas(body, height=dp(18), bg=T.SURFACE, highlightthickness=0, bd=0)
-        self.progress.pack(fill="x")
-        self.step_label = tk.Label(body, text="", bg=T.SURFACE, fg=T.ACCENT, font=font(9, "bold"), anchor="w")
-        self.step_label.pack(fill="x", pady=(dp(6), dp(14)))
+        hdr_row = tk.Frame(body, bg=T.SURFACE)
+        hdr_row.pack(fill="x", pady=(0, dp(8)))
+        self.step_badge = PillBadge(hdr_row, "", fg=T.ACCENT_HI, bg=T.SURFACE2, border=T.BORDER, size=8, padx=10, pady=3)
+        self.step_badge.pack(side="left")
+        self.step_label = tk.Label(hdr_row, text="", bg=T.SURFACE, fg=T.MUTED, font=font(9, "bold"), anchor="w")
+        self.step_label.pack(side="left", padx=(dp(10), 0))
+        self.progress_bar = ProgressBar(body, height=6, color=T.ACCENT, bg=T.SURFACE2, corner=3)
+        self.progress_bar.pack(fill="x", pady=(0, dp(16)))
         self.stage = tk.Frame(body, bg=T.SURFACE)
         self.stage.pack(fill="x")
         nav = tk.Frame(body, bg=T.SURFACE)
@@ -53,7 +57,6 @@ class WizardPage(Page):
         self.btn_back.pack(side="right", padx=(0, dp(8)))
         self.btn_skip = FlatButton(nav, "Skip setup", self.finish, style="ghost", size=9)
         self.btn_skip.pack(side="left")
-        self.progress.bind("<Configure>", lambda e: self._paint_progress())
         self.render()
 
     def next(self):
@@ -78,27 +81,6 @@ class WizardPage(Page):
     def on_show(self):
         self.step = 0
         self.render()
-
-    def _paint_progress(self):
-        c = self.progress
-        c.delete("all")
-        n = len(STEP_TITLES)
-        r = dp(5)
-        gap = dp(34)
-        cy = dp(9)
-        for i in range(n - 1):
-            x0 = r + dp(4) + i * gap
-            x1 = x0 + gap
-            c.create_line(x0, cy, x1, cy, fill=T.GOOD if i < self.step else T.BORDER, width=dp(2))
-        for i in range(n):
-            x = r + dp(4) + i * gap
-            if i < self.step:
-                c.create_oval(x - r, cy - r, x + r, cy + r, fill=T.GOOD, outline="")
-            elif i == self.step:
-                c.create_oval(x - r - dp(2), cy - r - dp(2), x + r + dp(2), cy + r + dp(2),
-                              fill=T.ACCENT_HI, outline=T.ACCENT, width=dp(2))
-            else:
-                c.create_oval(x - r, cy - r, x + r, cy + r, fill=T.SURFACE2, outline=T.BORDER_HI, width=dp(1))
 
     def _schedule_fit(self, width_px):
         if not width_px or width_px < 40:
@@ -129,8 +111,9 @@ class WizardPage(Page):
             w.destroy()
         self.refs = {}
         self._slow_cache = None
-        self.step_label.configure(text=f"STEP {self.step + 1} OF {len(STEP_TITLES)}  —  {STEP_TITLES[self.step].upper()}")
-        self._paint_progress()
+        self.step_badge.set_badge(f"STEP {self.step + 1} OF {len(STEP_TITLES)}")
+        self.step_label.configure(text=STEP_TITLES[self.step].upper())
+        self.progress_bar.set_progress((self.step + 1) / len(STEP_TITLES))
         [self.step_welcome, self.step_output, self.step_firewall, self.step_connect, self.step_done][self.step]()
         if self.step == 0:
             self.btn_back.pack_forget()
@@ -160,7 +143,7 @@ class WizardPage(Page):
         )
         self._title("Turn your phone into a studio microphone",
                     f"Takes about two minutes. Route your audio output, {fw_txt}, and pair your phone.")
-        box = tk.Frame(self.stage, bg=T.SIDEBAR, highlightthickness=1, highlightbackground=T.BORDER)
+        box = SurfaceBox(self.stage, bg=T.SIDEBAR, border=T.BORDER, corner=10)
         box.pack(fill="x", pady=(dp(4), 0))
         inner = tk.Frame(box, bg=T.SIDEBAR)
         inner.pack(fill="x", padx=dp(14), pady=dp(12))
@@ -311,7 +294,7 @@ class WizardPage(Page):
             autowrap(tk.Label(left, text=line, bg=T.SURFACE, fg=T.MUTED, font=font(10), anchor="w", justify="left",
                               wraplength=dp(360))).pack(fill="x", pady=(0, dp(3)))
 
-        qr_box = tk.Frame(top, bg=T.BG, highlightthickness=1, highlightbackground=T.BORDER_HI)
+        qr_box = SurfaceBox(top, bg="#ffffff", border=T.BORDER_HI, corner=10)
         qr_box.pack(side="right", padx=(dp(14), 0))
         qr_c = tk.Canvas(qr_box, width=dp(116), height=dp(116), bg="#ffffff", highlightthickness=0)
         qr_c.pack(padx=dp(4), pady=dp(4))

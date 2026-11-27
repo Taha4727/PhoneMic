@@ -21,6 +21,7 @@ from collections import deque
 import numpy as np
 
 from . import system, virtual_mic
+from .cat_preview import default_cat_wav_path, load_preview_buffer, load_wav_48k_mono
 from .const import (VERSION, FRAME, FRAME_MS, SAMPLE_RATE, PACKET_MAGIC, PACKET_MAGIC_24K, PACKET_MAGIC_16K,
                     FMT_PCM_16, FMT_PCM_8, FMT_PCM_24, FMT_PCM_FLOAT32, FMT_BYTES_PER_SAMPLE,
                     DISCOVERY_PROBE, DISCOVERY_REPLY, CMD_PAUSE, CMD_RESUME, SIO_UDP_CONNRESET)
@@ -1069,11 +1070,23 @@ class Receiver:
         self.tone_left = 0
         self.tone_total = 0
         self.tone_phase = 0.0
+        self._preview_lock = threading.Lock()
+        self._preview_samples = None
+        self._preview_source_key = None
+        self._preview_is_custom = False
+        self._preview_path = ""
+        self._preview_pos = 0
+        self._preview_left = 0
+        self._preview_reset_dsp = False
+        self._preview_proc = None
+        self._preview_idle_at = 0.0
 
         self._wake = threading.Event()
         self.main = OutputPort("Main output", self._wake, self.sd, self.log)
         self.monitor = OutputPort("Monitor", self._wake, self.sd, self.log)
+        self._preview_port = OutputPort("Cat Preview", self._wake, self.sd, self.log)
         self.main.expect_audio = self.monitor.expect_audio = lambda: not self.jb.buffering and not self.jb.idle
+        self._preview_port.expect_audio = lambda: self._preview_left > 0
         self.apply_audio_settings()
 
         self.devices = []
@@ -1130,6 +1143,7 @@ class Receiver:
             self._thread.join(timeout=2.0)
         self.main.close()
         self.monitor.close()
+        self._preview_port.close()
         if (
             system.IS_LINUX
             and getattr(self.sd, "__name__", "") != "fake_sd"
@@ -1207,6 +1221,10 @@ class Receiver:
         self.open_main()
         if self.monitoring:
             self._open_monitor()
+        elif self._preview_port.active:
+            self._preview_port.close()
+            if self._preview_left > 0:
+                self._open_preview_port()
         self.config.save_soon()
 
     def set_output_device(self, dev):
@@ -1221,6 +1239,10 @@ class Receiver:
         self.config.save_soon()
         if self.monitoring:
             self._open_monitor()
+        elif self._preview_port.active:
+            self._preview_port.close()
+            if self._preview_left > 0:
+                self._open_preview_port()
 
     def set_output_latency(self, mode):
         self.config.data["audio"]["output_latency"] = mode
@@ -1228,6 +1250,10 @@ class Receiver:
         self.open_main()
         if self.monitoring:
             self._open_monitor()
+        elif self._preview_port.active:
+            self._preview_port.close()
+            if self._preview_left > 0:
+                self._open_preview_port()
 
     @property
     def stream_timeout(self):
@@ -1318,10 +1344,27 @@ class Receiver:
         self.hold_mute = bool(flag)
 
     def _open_monitor(self):
+        self._preview_port.close()
         ok = self.monitor.open(self.monitor_dev, self.config.data["audio"]["output_latency"])
         if not ok:
             self.monitoring = False
         return ok
+
+    def _open_preview_port(self):
+        if self.monitoring and self.monitor.active:
+            return False
+        if self._preview_port.active:
+            return True
+        dev = self.monitor_dev or self.main_dev
+        if self.sd is None or dev is None:
+            return False
+        return self._preview_port.open(dev, self.config.data["audio"]["output_latency"])
+
+    def _preview_gain(self):
+        vol = float(self.processor.monitor_volume)
+        if self.monitoring and self.monitor.active:
+            return vol
+        return vol if vol > 0.05 else 0.85
 
     def toggle_monitor(self):
         if self.monitoring:
@@ -1346,6 +1389,82 @@ class Receiver:
         self.tone_total = int(seconds * SAMPLE_RATE)
         self.tone_left = self.tone_total
         self._wake.set()
+
+    @property
+    def preview_active(self):
+        return self._preview_left > 0
+
+    def cat_preview_info(self):
+        """Return (label, is_custom) for the currently configured cat preview WAV."""
+        custom = str(self.config.data.get("voice_changer", {}).get("preview_wav_path", "") or "").strip()
+        if custom and os.path.isfile(custom):
+            return os.path.basename(custom), True
+        return "Default cat", False
+
+    def _ensure_preview_loaded(self, force=False):
+        custom = str(self.config.data.get("voice_changer", {}).get("preview_wav_path", "") or "").strip()
+        candidate = custom if custom and os.path.isfile(custom) else default_cat_wav_path()
+        try:
+            st = os.stat(candidate)
+            key = (custom, candidate, st.st_mtime_ns, st.st_size)
+        except OSError:
+            key = (custom, candidate, 0, 0)
+        if not force and self._preview_samples is not None and key == self._preview_source_key:
+            return
+        buf, resolved, is_custom, fallback_err = load_preview_buffer(custom_path=custom)
+        if fallback_err:
+            self.log.warn(fallback_err)
+        with self._preview_lock:
+            self._preview_samples = buf
+            self._preview_source_key = key
+            self._preview_is_custom = is_custom
+            self._preview_path = resolved
+
+    def set_cat_preview_wav(self, path=""):
+        """Validate and store custom cat preview WAV path (empty string restores default)."""
+        clean = str(path or "").strip()
+        if clean:
+            try:
+                load_wav_48k_mono(clean)
+            except Exception as exc:      # noqa: BLE001
+                return False, str(exc)
+        self.config.data["voice_changer"]["preview_wav_path"] = clean
+        self.config.save_soon()
+        try:
+            self._ensure_preview_loaded(force=True)
+        except Exception as exc:      # noqa: BLE001
+            return False, str(exc)
+        label, _ = self.cat_preview_info()
+        return True, label
+
+    def play_cat_preview(self):
+        """Play one cat meow through active user DSP effects (restarts from start if already playing)."""
+        try:
+            self._ensure_preview_loaded()
+        except Exception as exc:      # noqa: BLE001
+            self.log.error(f"Cat preview error: {exc}")
+            return False, str(exc)
+        with self._preview_lock:
+            if self._preview_samples is None or len(self._preview_samples) == 0:
+                return False, "No cat preview audio loaded."
+            self._preview_pos = 0
+            self._preview_left = len(self._preview_samples)
+            self._preview_reset_dsp = True
+        self._preview_idle_at = 0.0
+        if not self.monitoring and not self._preview_port.active:
+            self._open_preview_port()
+        self._wake.set()
+        label, _ = self.cat_preview_info()
+        return True, label
+
+    def stop_cat_preview(self):
+        with self._preview_lock:
+            self._preview_left = 0
+            self._preview_pos = 0
+            self._preview_reset_dsp = False
+        if self._preview_port.active:
+            self._preview_port.ring.clear()
+            self._preview_idle_at = time.monotonic()
 
     def reset_stats(self):
         self.stats.reset_session()
@@ -1562,7 +1681,8 @@ class Receiver:
         self._next_block_t = time.monotonic()
         while self.running:
             try:
-                self._wake.wait(0.02 if self.main.active else 0.004)
+                pace_port = self._pace_port()
+                self._wake.wait(0.02 if pace_port is not None else 0.004)
                 self._wake.clear()
                 now = time.monotonic()
                 self.stats.tick(now)
@@ -1570,11 +1690,15 @@ class Receiver:
                     self._health_t = now
                     self._health_check()
                 t0 = time.perf_counter()
-                if self.main.active:
+                pace_port = self._pace_port()
+                if pace_port is not None:
                     guard = 0
-                    while self.main.ring.level() < self.ring_target and guard < 8:
+                    while pace_port.ring.level() < self.ring_target and guard < 8:
                         guard += 1
                         if not self._produce():
+                            break
+                        pace_port = self._pace_port()
+                        if pace_port is None:
                             break
                 else:                                   # no sound card: pace by wall clock so meters/recording still work
                     while now >= self._next_block_t:
@@ -1585,9 +1709,32 @@ class Receiver:
                         if now - self._next_block_t > 0.1:
                             self._next_block_t = now
                 self._dsp_loop_ms = 0.9 * self._dsp_loop_ms + 0.1 * (time.perf_counter() - t0) * 1000.0
+                if self._preview_port.active:
+                    if self._preview_left <= 0 and self._preview_port.ring.level() == 0:
+                        if self._preview_idle_at == 0.0:
+                            self._preview_idle_at = now
+                        elif (now - self._preview_idle_at) >= 0.40:
+                            self._preview_port.close()
+                            self._preview_idle_at = 0.0
+                    else:
+                        self._preview_idle_at = 0.0
             except Exception as e:      # noqa: BLE001
                 self.log.error(f"Engine error: {e!r}")
                 time.sleep(0.05)
+
+    def _pace_port(self):
+        if self._preview_left > 0 and self.tone_left <= 0 and not self.client_streams and self.jb.idle:
+            if self.monitoring and self.monitor.active:
+                return self.monitor
+            if self._preview_port.active:
+                return self._preview_port
+        if self.monitoring and self.monitor.active and not self.main.active:
+            return self.monitor
+        if self.main.active:
+            return self.main
+        if self._preview_port.active:
+            return self._preview_port
+        return None
 
     def _health_check(self):
         """Reopen the output if the device vanished (USB headset unplugged, driver reset...)."""
@@ -1619,6 +1766,57 @@ class Receiver:
         self.tone_phase = float(phase[-1]) % (2.0 * np.pi)
         self.tone_left -= k
         return out
+
+    def _preview_block(self, n):
+        """Return (float32 block, need_reset) for the next preview slice, or (None, False) if inactive."""
+        with self._preview_lock:
+            if self._preview_left <= 0 or self._preview_samples is None:
+                return None, False
+            pos = self._preview_pos
+            k = min(n, self._preview_left)
+            chunk = self._preview_samples[pos:pos + k]
+            if k < n:
+                out = np.zeros(n, np.float32)
+                out[:k] = chunk
+            else:
+                out = chunk.astype(np.float32, copy=True)
+            self._preview_pos = pos + k
+            self._preview_left -= k
+            reset = self._preview_reset_dsp
+            self._preview_reset_dsp = False
+            return out, reset
+
+    def _process_concurrent_preview(self, block, need_reset):
+        """Run preview through a shadow AudioProcessor when live unmuted phone audio owns self.processor."""
+        if self._preview_proc is None:
+            self._preview_proc = AudioProcessor(fs=SAMPLE_RATE)
+            self._preview_proc.viz_active = False
+        p = self._preview_proc
+        fx_snap = self.processor.export_fx()
+        vc_snap = self.processor.voice_changer.export()
+        sig = (
+            self.processor.active_preset,
+            tuple(sorted(fx_snap.items())),
+            self.processor.voice_changer.active_preset,
+            tuple(sorted(vc_snap.items())),
+        )
+        if need_reset or sig != getattr(self, "_preview_fx_sig", None):
+            self._preview_fx_sig = sig
+            p.apply_fx(fx_snap, self.processor.active_preset)
+            p.voice_changer.load(vc_snap, self.processor.voice_changer.active_preset)
+        if need_reset:
+            p.reset()
+        p.fx_bypass = self.processor.fx_bypass
+        return p.process(block)
+
+    def _route_preview_only(self, prev_out):
+        """Route preview audio to Monitor (or preview speaker port when Monitor is off), else Main output (never Recorder)."""
+        if self.monitoring and self.monitor.active:
+            self.monitor.ring.write(prev_out * np.float32(self._preview_gain()))
+        elif self._preview_port.active:
+            self._preview_port.ring.write(prev_out * np.float32(self._preview_gain()))
+        else:
+            self.main.ring.write(prev_out)
 
     def _produce(self):
         """Pull one block from the jitter buffer, run the DSP chain, fan out. Returns False if there was nothing."""
@@ -1659,6 +1857,7 @@ class Receiver:
                 self.client_fmt_code = sessions[0].fmt_code
 
         tone = self._tone_block(FRAME)
+        prev_blk, prev_reset = self._preview_block(FRAME)
 
         if self._reset_dsp:
             self._reset_dsp = False
@@ -1689,23 +1888,35 @@ class Receiver:
             self._plc_run = 0
             self._last_raw = None
             self._after_gap = True
-            if tone is None:
+            if tone is None and prev_blk is None:
                 self.processor.level_peak = 0.0
                 self.processor.level_rms = 0.0
                 self.processor.level_db = -80.0
                 return False
-            self._emit(tone, tone, tone, rec_cfg)
+            if prev_blk is not None:
+                if prev_reset:
+                    self.processor.reset()
+                prev_out = self.processor.process(prev_blk)
+                self._route_preview_only(prev_out)
+            if tone is not None:
+                self._emit(tone, tone, tone, rec_cfg)
             return True
         elif n_sessions <= 1 and pcm is None and kind == WAIT:
             self._plc_run = 0
             self._last_raw = None
             self._after_gap = True
-            if tone is None:
+            if tone is None and prev_blk is None:
                 self.processor.level_peak = 0.0
                 self.processor.level_rms = 0.0
                 self.processor.level_db = -80.0
                 return False
-            self._emit(tone, tone, tone, rec_cfg)
+            if prev_blk is not None:
+                if prev_reset:
+                    self.processor.reset()
+                prev_out = self.processor.process(prev_blk)
+                self._route_preview_only(prev_out)
+            if tone is not None:
+                self._emit(tone, tone, tone, rec_cfg)
             return True
 
         if not multi_blocks:
@@ -1730,11 +1941,17 @@ class Receiver:
                 self._after_gap = True
 
         raw = x
+        prev_out = None
         if self.paused:
             out = _ZERO_FRAME if len(x) == FRAME else np.zeros(len(x), np.float32)
             raw = out                                   # a muted microphone is not recorded either
-            self.processor.level_peak = self.processor.level_rms = 0.0
-            self.processor.level_db = -80.0
+            if prev_blk is not None:
+                if prev_reset:
+                    self.processor.reset()
+                prev_out = self.processor.process(prev_blk)
+            else:
+                self.processor.level_peak = self.processor.level_rms = 0.0
+                self.processor.level_db = -80.0
         else:
             if self._after_gap and pcm is not None:
                 x = x.copy()
@@ -1754,18 +1971,40 @@ class Receiver:
             elif target == 0.0:
                 out = _ZERO_FRAME if len(out) == FRAME else np.zeros(len(out), np.float32)
                 raw = out
-            if target == 0.0 and self._gate_gain == 0.0 and not np.any(out):
+            if prev_blk is not None:
+                prev_out = self._process_concurrent_preview(prev_blk, prev_reset)
+                if target == 0.0 and self._gate_gain == 0.0 and not np.any(out):
+                    self.processor.level_peak = self._preview_proc.level_peak
+                    self.processor.level_rms = self._preview_proc.level_rms
+                    self.processor.level_db = self._preview_proc.level_db
+                    self.processor.clipped = self._preview_proc.clipped
+                    if self.processor.viz_active:
+                        self.processor.analyzer.push(prev_out)
+                        self.processor.analyzer.update()
+            elif target == 0.0 and self._gate_gain == 0.0 and not np.any(out):
                 self.processor.level_peak = self.processor.level_rms = 0.0
                 self.processor.level_db = -80.0
+
+        rec_processed = out
         if tone is not None and len(tone) == len(out):
             out = out + tone
-        self._emit(out, raw, out, rec_cfg)
+        if prev_out is not None and len(prev_out) == len(out):
+            if self.monitoring and self.monitor.active:
+                self._emit(out, raw, rec_processed, rec_cfg, monitor_extra=prev_out)
+            elif self._preview_port.active:
+                self._emit(out, raw, rec_processed, rec_cfg)
+                self._preview_port.ring.write(prev_out * np.float32(self._preview_gain()))
+            else:
+                self._emit(out + prev_out, raw, rec_processed, rec_cfg)
+        else:
+            self._emit(out, raw, rec_processed, rec_cfg)
         return True
 
-    def _emit(self, out, raw, processed, rec_cfg=None):
+    def _emit(self, out, raw, processed, rec_cfg=None, monitor_extra=None):
         self.main.ring.write(out)
         if self.monitoring:
-            self.monitor.ring.write(out * np.float32(self.processor.monitor_volume))
+            mon_sig = out if monitor_extra is None else (out + monitor_extra)
+            self.monitor.ring.write(mon_sig * np.float32(self.processor.monitor_volume))
         if self.recorder.active:
             source = rec_cfg["source"] if rec_cfg is not None else self.config.data["recording"]["source"]
             self.recorder.write(raw if source == "raw" else processed)

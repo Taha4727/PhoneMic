@@ -17,3 +17,4 @@ local.properties
 .env
 debug.keystore
 *.wav
+!windows_receiver/assets/cat_meow.wav

@@ -52,6 +52,12 @@ VALID = {
     "CTkOptionMenu": _CTK_COMMON | {"values", "button_color", "button_hover_color", "dropdown_fg_color",
                                     "dropdown_hover_color", "dropdown_text_color", "text_color", "text_color_disabled",
                                     "font", "dropdown_font", "command", "state"},
+    "CTkSegmentedButton": _CTK_COMMON | {"values", "command", "font", "state", "selected_color", "selected_hover_color",
+                                         "unselected_color", "unselected_hover_color", "text_color",
+                                         "text_color_disabled", "dynamic_resizing"},
+    "CTkEntry": _CTK_COMMON | {"textvariable", "placeholder_text", "placeholder_text_color", "text_color",
+                               "text_color_disabled", "font", "justify", "state", "show"},
+    "CTkProgressBar": _CTK_COMMON | {"progress_color", "mode", "determinate_speed", "indeterminate_speed"},
 }
 _ITEM_COMMON = {"state", "tags", "dash", "dashoffset", "activedash", "disableddash"}
 ITEM_VALID = {
@@ -71,7 +77,9 @@ _COLOR_OPTS = {"background", "bg", "foreground", "fg", "highlightbackground", "h
                "selectbackground", "selectforeground", "activebackground", "activeforeground", "disabledforeground",
                "disabledbackground", "readonlybackground", "fg_color", "hover_color", "border_color", "text_color",
                "text_color_disabled", "progress_color", "button_color", "button_hover_color", "dropdown_fg_color",
-               "dropdown_hover_color", "dropdown_text_color", "scrollbar_button_color", "scrollbar_button_hover_color"}
+               "dropdown_hover_color", "dropdown_text_color", "scrollbar_button_color", "scrollbar_button_hover_color",
+               "selected_color", "selected_hover_color", "unselected_color", "unselected_hover_color",
+               "placeholder_text_color"}
 _PACK = {"after", "anchor", "before", "expand", "fill", "side", "in", "in_", "ipadx", "ipady", "padx", "pady"}
 _GRID = {"column", "columnspan", "in", "in_", "ipadx", "ipady", "padx", "pady", "row", "rowspan", "sticky"}
 _NAMED = {"white", "black", "red", "green", "blue", "gray", "grey", "SystemButtonFace", "transparent"}
@@ -275,11 +283,29 @@ class Misc:
     def winfo_screenheight(self):
         return 1080
 
+    def winfo_vrootx(self):
+        return 0
+
+    def winfo_vrooty(self):
+        return 0
+
+    def winfo_vrootwidth(self):
+        return self.winfo_screenwidth()
+
+    def winfo_vrootheight(self):
+        return self.winfo_screenheight()
+
     def winfo_geometry(self):
         return "1020x740+120+80"
 
     def winfo_exists(self):
         return not self.destroyed
+
+    def winfo_manager(self):
+        return self.packed[0] if self.packed else ""
+
+    def winfo_ismapped(self):
+        return (not self.destroyed) and (self.packed is not None)
 
     def focus_set(self):
         pass
@@ -377,7 +403,7 @@ class Tk(Misc):
         pass
 
     def wm_geometry(self, g):
-        pass
+        self._wm_geo = g
 
 
 class Toplevel(Tk):
@@ -396,6 +422,9 @@ class Label(Misc):
 
 class Entry(Misc):
     def select_range(self, *a):
+        pass
+
+    def icursor(self, *a):
         pass
 
     def insert(self, *a):
@@ -652,6 +681,75 @@ class CTkOptionMenu(_CTkBase):
         self._menu_val = v
 
 
+class CTkSegmentedButton(_CTkBase):
+    def __init__(self, master=None, **kw):
+        super().__init__(master, **kw)
+        vals = list(kw.get("values") or [])
+        self._seg_val = vals[0] if vals else ""
+        self._buttons_dict = {
+            v: CTkButton(self, text=v, command=lambda val=v: self.set(val, from_button_callback=True))
+            for v in vals
+        }
+
+    def get(self):
+        return self._seg_val
+
+    def set(self, v, from_variable_callback=False, from_button_callback=False):
+        self._seg_val = v
+        if from_button_callback:
+            cmd = self._opts.get("command")
+            if cmd is not None:
+                cmd(v)
+
+    def bind(self, *a, **kw):
+        raise NotImplementedError("CTkSegmentedButton does not support bind()")
+
+
+class CTkEntry(_CTkBase):
+    def __init__(self, master=None, **kw):
+        super().__init__(master, **kw)
+        self._var = kw.get("textvariable")
+        self._txt = ""
+        self._entry = self
+
+    def get(self):
+        return self._var.get() if self._var is not None else self._txt
+
+    def insert(self, idx, s):
+        cur = self.get() + str(s)
+        if self._var is not None:
+            self._var.set(cur)
+        else:
+            self._txt = cur
+
+    def delete(self, a, b=None):
+        if self._var is not None:
+            self._var.set("")
+        else:
+            self._txt = ""
+
+    def select_range(self, *a):
+        pass
+
+    def icursor(self, *a):
+        pass
+
+
+class CTkProgressBar(_CTkBase):
+    def __init__(self, master=None, **kw):
+        super().__init__(master, **kw)
+        self._prog_val = 0.0
+
+    def get(self):
+        return self._prog_val
+
+    def set(self, v):
+        self._prog_val = float(v)
+
+    def bind(self, *a, **kw):
+        raise NotImplementedError("CTkProgressBar does not support bind()")
+
+
 def install():
     tk = types.ModuleType("tkinter")
     for name in ("Tk", "Toplevel", "Frame", "Label", "Entry", "Scrollbar", "Text", "Canvas", "StringVar", "IntVar",
@@ -672,12 +770,14 @@ def install():
     tk.ttk, tk.filedialog, tk.messagebox = ttk, fd, mb
 
     ctk_mod = types.ModuleType("customtkinter")
-    for name in ("CTk", "CTkToplevel", "CTkFrame", "CTkScrollableFrame", "CTkButton", "CTkSwitch", "CTkOptionMenu"):
+    for name in ("CTk", "CTkToplevel", "CTkFrame", "CTkScrollableFrame", "CTkButton", "CTkSwitch",
+                 "CTkOptionMenu", "CTkSegmentedButton", "CTkEntry", "CTkProgressBar"):
         setattr(ctk_mod, name, globals()[name])
     ctk_mod.set_appearance_mode = lambda mode: None
     ctk_mod.set_default_color_theme = lambda theme: None
     ctk_mod.set_widget_scaling = lambda scale: None
     ctk_mod.set_window_scaling = lambda scale: None
+    ctk_mod.deactivate_automatic_dpi_awareness = lambda: None
 
     sys.modules.update({
         "tkinter": tk,

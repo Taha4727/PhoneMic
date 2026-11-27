@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release Tag Name (e.g. v1.4.0)'
+        description: 'Release Tag Name (e.g. v1.4.2)'
         required: true
-        default: 'v1.4.0'
+        default: 'v1.4.2'
       release_title:
         description: 'Release Title'
         required: false
-        default: 'PhoneMic v1.4.0'
+        default: 'PhoneMic v1.4.2'
       is_draft:
         description: 'Create as Draft Release'
         type: boolean

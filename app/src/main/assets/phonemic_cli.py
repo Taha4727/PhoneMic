@@ -38,7 +38,7 @@ import threading
 import time
 from collections import deque
 
-VERSION = "1.4.0"
+VERSION = "1.4.2"
 DEFAULT_PORT = 5001
 DISCOVERY_PROBE = b"PM_DISCOVER"
 DISCOVERY_REPLY = b"PMA1"

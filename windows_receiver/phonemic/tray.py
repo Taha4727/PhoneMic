@@ -1,4 +1,6 @@
 """Notification-area (tray) icon. Optional: needs the `pystray` and `Pillow` packages; without them the app simply has no tray."""
+import base64
+import io
 import threading
 
 STATE_COLORS = {"waiting": "#949eae", "streaming": "#4cd48a", "muted": "#ffb547", "silent": "#ffb547", "lost": "#ffb547",
@@ -22,19 +24,25 @@ def make_image(color, Image, ImageDraw, size=64):
     key = (id(Image), size)
     if key not in _base:
         big = 256
-        grad = Image.new("RGB", (2, 2))
-        grad.putpixel((0, 0), (62, 166, 255)); grad.putpixel((1, 0), (101, 129, 250))
-        grad.putpixel((0, 1), (101, 129, 250)); grad.putpixel((1, 1), (139, 92, 246))
-        grad = grad.resize((big, big), Image.BILINEAR)
-        mask = Image.new("L", (big, big), 0)
-        ImageDraw.Draw(mask).rounded_rectangle((0, 0, big - 1, big - 1), radius=int(big * 0.22), fill=255)
-        img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-        img.paste(grad, (0, 0), mask)
-        d, w, c = ImageDraw.Draw(img), (255, 255, 255, 255), big // 2
-        d.rounded_rectangle((c - 31, 48, c + 31, 150), radius=31, fill=w)
-        d.arc((c - 56, 85, c + 56, 186), start=20, end=160, fill=w, width=13)
-        d.rectangle((c - 6, 186, c + 6, 210), fill=w)
-        d.rounded_rectangle((c - 33, 205, c + 33, 218), radius=6, fill=w)
+        img = None
+        try:
+            from .icon import TRAY_PNG_B64
+            img = Image.open(io.BytesIO(base64.b64decode(TRAY_PNG_B64))).convert("RGBA")
+            if img.size != (big, big):
+                img = img.resize((big, big), Image.LANCZOS)
+        except Exception:
+            img = None
+        if img is None:
+            bg = Image.new("RGBA", (big, big), (13, 17, 23, 255))
+            mask = Image.new("L", (big, big), 0)
+            ImageDraw.Draw(mask).rounded_rectangle((0, 0, big - 1, big - 1), radius=int(big * 0.22), fill=255)
+            img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+            img.paste(bg, (0, 0), mask)
+            d, cy, w, c = ImageDraw.Draw(img), (0, 235, 255, 255), (255, 255, 255, 255), big // 2
+            d.rounded_rectangle((c - 30, 44, c + 30, 148), radius=30, outline=cy, width=10)
+            d.arc((c - 54, 82, c + 54, 184), start=15, end=165, fill=w, width=11)
+            d.rectangle((c - 6, 184, c + 6, 208), fill=w)
+            d.ellipse((c - 32, 204, c + 32, 222), outline=cy, width=8)
         _base[key] = img
     img = _base[key].copy()
     d = ImageDraw.Draw(img)

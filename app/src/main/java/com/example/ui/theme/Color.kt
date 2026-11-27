@@ -1,5 +1,6 @@
 package com.example.ui.theme
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
@@ -45,6 +46,12 @@ enum class AppPaletteStyle(
         label = "Expressive",
         description = "Bold warm coral & high-character accents",
         previewColor = Color(0xFFF43F5E)
+    ),
+    CUSTOM(
+        id = "CUSTOM",
+        label = "Custom Color",
+        description = "Pick any custom hue, saturation, or hex accent color",
+        previewColor = Color(0xFF0EA5E9)
     );
 
     companion object {
@@ -53,61 +60,7 @@ enum class AppPaletteStyle(
     }
 }
 
-enum class ThemeColorPreset(
-    val id: String,
-    val label: String,
-    val description: String,
-    val colorArgb: Long?
-) {
-    DEFAULT(
-        id = "DEFAULT",
-        label = "Palette Default",
-        description = "Use the accent defined by your Palette Style",
-        colorArgb = null
-    ),
-    OCEAN_BLUE(
-        id = "OCEAN_BLUE",
-        label = "Ocean Blue",
-        description = "Cool sky-blue studio highlight",
-        colorArgb = 0xFF0EA5E9L
-    ),
-    EMERALD(
-        id = "EMERALD",
-        label = "Emerald",
-        description = "Crisp broadcast green accent",
-        colorArgb = 0xFF10B981L
-    ),
-    VIOLET(
-        id = "VIOLET",
-        label = "Electric Violet",
-        description = "Deep indigo-violet accent",
-        colorArgb = 0xFF8B5CF6L
-    ),
-    AMBER_GOLD(
-        id = "AMBER_GOLD",
-        label = "Amber Gold",
-        description = "Warm VU-meter gold highlight",
-        colorArgb = 0xFFF59E0BL
-    ),
-    CRIMSON(
-        id = "CRIMSON",
-        label = "Crimson Rose",
-        description = "High-visibility live recording red-rose",
-        colorArgb = 0xFFF43F5EL
-    ),
-    CUSTOM(
-        id = "CUSTOM",
-        label = "Custom Color",
-        description = "Pick any custom hue, saturation, or hex value",
-        colorArgb = null
-    );
-
-    companion object {
-        fun fromId(id: String?): ThemeColorPreset =
-            entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: DEFAULT
-    }
-}
-
+@Immutable
 data class PhoneMicColors(
     val isDark: Boolean,
     val isOled: Boolean,
@@ -150,13 +103,12 @@ fun resolvePhoneMicColors(
     isDark: Boolean,
     oledBlack: Boolean,
     palette: AppPaletteStyle,
-    themeColorPreset: ThemeColorPreset = ThemeColorPreset.DEFAULT,
     customColorArgb: Long = 0xFF0EA5E9L
 ): PhoneMicColors {
     val isOledActive = isDark && oledBlack
 
     val (paletteAccentDark, paletteOnDark, paletteSoftDark, paletteSecondaryDark) = when (palette) {
-        AppPaletteStyle.TONAL_SPOT -> QuadColor(Color(0xFF38BDF8), Color(0xFF062334), Color(0xFF122836), Color(0xFF818CF8))
+        AppPaletteStyle.TONAL_SPOT, AppPaletteStyle.CUSTOM -> QuadColor(Color(0xFF38BDF8), Color(0xFF062334), Color(0xFF122836), Color(0xFF818CF8))
         AppPaletteStyle.NEUTRAL -> QuadColor(Color(0xFF94A3B8), Color(0xFF0F172A), Color(0xFF1E242D), Color(0xFFCBD5E1))
         AppPaletteStyle.VIBRANT -> QuadColor(Color(0xFF22D38B), Color(0xFF022C1B), Color(0xFF0D2B20), Color(0xFF38BDF8))
         AppPaletteStyle.MONOCHROME -> QuadColor(Color(0xFFF4F4F5), Color(0xFF09090B), Color(0xFF242429), Color(0xFFA1A1AA))
@@ -165,7 +117,7 @@ fun resolvePhoneMicColors(
     }
 
     val (paletteAccentLight, paletteOnLight, paletteSoftLight, paletteSecondaryLight) = when (palette) {
-        AppPaletteStyle.TONAL_SPOT -> QuadColor(Color(0xFF0284C7), Color(0xFFFFFFFF), Color(0xFFE0F2FE), Color(0xFF4F46E5))
+        AppPaletteStyle.TONAL_SPOT, AppPaletteStyle.CUSTOM -> QuadColor(Color(0xFF0284C7), Color(0xFFFFFFFF), Color(0xFFE0F2FE), Color(0xFF4F46E5))
         AppPaletteStyle.NEUTRAL -> QuadColor(Color(0xFF334155), Color(0xFFFFFFFF), Color(0xFFE2E8F0), Color(0xFF475569))
         AppPaletteStyle.VIBRANT -> QuadColor(Color(0xFF059669), Color(0xFFFFFFFF), Color(0xFFD1FAE5), Color(0xFF0284C7))
         AppPaletteStyle.MONOCHROME -> QuadColor(Color(0xFF18181B), Color(0xFFFFFFFF), Color(0xFFE4E4E7), Color(0xFF52525B))
@@ -173,15 +125,15 @@ fun resolvePhoneMicColors(
         AppPaletteStyle.EXPRESSIVE -> QuadColor(Color(0xFFE11D48), Color(0xFFFFFFFF), Color(0xFFFFE4E6), Color(0xFFD97706))
     }
 
-    val overrideSeedArgb: Long? = when (themeColorPreset) {
-        ThemeColorPreset.DEFAULT -> null
-        ThemeColorPreset.CUSTOM -> customColorArgb or 0xFF000000L
-        else -> themeColorPreset.colorArgb
+    val overrideSeedArgb: Long? = if (palette == AppPaletteStyle.CUSTOM) {
+        customColorArgb or 0xFF000000L
+    } else {
+        null
     }
 
     if (!isDark) {
         val bgLight = when (palette) {
-            AppPaletteStyle.TONAL_SPOT -> Color(0xFFF3F6FA)
+            AppPaletteStyle.TONAL_SPOT, AppPaletteStyle.CUSTOM -> Color(0xFFF3F6FA)
             AppPaletteStyle.NEUTRAL -> Color(0xFFF5F5F6)
             AppPaletteStyle.VIBRANT -> Color(0xFFF2F7F5)
             AppPaletteStyle.MONOCHROME -> Color(0xFFF4F4F5)
@@ -229,7 +181,7 @@ fun resolvePhoneMicColors(
         Color(0xFF08080A)
     } else {
         when (palette) {
-            AppPaletteStyle.TONAL_SPOT -> Color(0xFF1A1D22)
+            AppPaletteStyle.TONAL_SPOT, AppPaletteStyle.CUSTOM -> Color(0xFF1A1D22)
             AppPaletteStyle.NEUTRAL -> Color(0xFF1A1A1C)
             AppPaletteStyle.VIBRANT -> Color(0xFF171E1C)
             AppPaletteStyle.MONOCHROME -> Color(0xFF19191B)

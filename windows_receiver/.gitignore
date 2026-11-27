@@ -6,3 +6,4 @@ phonemic_config.json
 phonemic_config.json.*
 phonemic_crash.log
 *.wav
+!assets/cat_meow.wav
