@@ -271,15 +271,22 @@ sp._pick_tab("general")
 
 # Toggle controls reflect True/False accurately and dependent Segmented choice rows disable cleanly
 app.show_page("sound"); snd = app.pages["sound"]; snd.pick_stage("filters")
-app.binder.set(sm.BY_KEY["lowcut_enabled"], True)
-assert snd.panels["filters"]["header"].switch.get() is True
+lowcut_row = next(r for r in snd.panels["filters"]["rows"] if r.setting.key == "lowcut_enabled")
 slope_row = next(r for r in snd.panels["filters"]["rows"] if r.setting.key == "lowcut_slope")
+app.binder.set(sm.BY_KEY["lowcut_enabled"], True)
+assert lowcut_row.control.get() is True
 assert slope_row.enabled is True and slope_row.control._enabled is True
-snd.panels["filters"]["header"].switch._click()
-assert app.proc.lowcut_enabled is False and snd.panels["filters"]["header"].switch.get() is False
+lowcut_row.control._click()
+assert app.proc.lowcut_enabled is False and lowcut_row.control.get() is False
 assert slope_row.enabled is False and slope_row.control._enabled is False
 app.binder.set(sm.BY_KEY["lowcut_enabled"], True)
+assert lowcut_row.control.get() is True
 assert slope_row.enabled is True and slope_row.control._enabled is True
+snd.pick_stage("noise")
+app.binder.set(sm.BY_KEY["smart_noise_cancel"], False)
+assert snd.panels["noise"]["header"].switch.get() is False
+snd.panels["noise"]["header"].switch._click()
+assert app.proc.smart_noise_cancel is True and snd.panels["noise"]["header"].switch.get() is True
 
 cfg.data["app"]["first_run_done"] = False
 app.show_page("wizard"); wz = app.pages["wizard"]; wz.on_show(); assert wz.step == 0

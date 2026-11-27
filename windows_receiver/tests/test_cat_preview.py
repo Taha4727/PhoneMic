@@ -434,6 +434,9 @@ def test_ui_visibility_bare_toggle_and_controls():
     assert app.cat_preview_visible() is False
     assert rx.preview_active is False
     assert app.pages["dashboard"].cat_btn.packed is None
+    app.show_page("sound")
+    snd = app.pages["sound"]
+    snd.pick_stage("voice")
     assert snd.voice_widgets["cat_bar"].packed is None
 
     # 7. Upload & reset via filedialog
@@ -462,12 +465,18 @@ def test_ui_visibility_bare_toggle_and_controls():
     app.toggle_ui_mode()
     assert app.ui_mode == "minimal" and app.minimal_view is not None
     mv = app.minimal_view
-    rx.preview_active = True
+    if isinstance(rx, Receiver):
+        rx._preview_left = FRAME
+    else:
+        rx.preview_active = True
     rx.processor.level_db = -12.0
     rx.processor.level_rms = 0.25
     mv.refresh_fast()
     assert "-∞" not in mv.lbl_db.cget("text")
-    rx.preview_active = False
+    if isinstance(rx, Receiver):
+        rx._preview_left = 0
+    else:
+        rx.preview_active = False
     mv.peak_s = -80.0
     mv.refresh_fast()
     assert mv.lbl_db.cget("text") == "-∞ dB"
@@ -478,7 +487,7 @@ def test_ui_visibility_bare_toggle_and_controls():
         src = open(os.path.join(_path.ROOT, "phonemic", fname), encoding="utf-8").read()
         assert ".packed" not in src, f"{fname} must use winfo_manager() instead of fake_tk-only .packed"
 
-    app.cfg.close()
+    app.on_close()
 
 
 def test_real_numpy_cat_dsp_and_routing():
