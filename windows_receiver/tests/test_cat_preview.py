@@ -530,7 +530,8 @@ def test_real_numpy_cat_dsp_and_routing():
     ok, _ = rx.set_cat_preview_wav(wav_path)
     assert ok is True
     rx.processor.voice_changer.load({"enabled": True, "mode": "Robot", "pitch_semitones": -4.0, "formant_semitones": -2.0, "mix": 1.0}, "Robot")
-    rx.recorder.active = True
+    rx.recorder.q = object()
+    assert rx.recorder.active is True
     rec_writes = []
     rx.recorder.write = lambda blk: rec_writes.append(blk)
 
@@ -605,6 +606,10 @@ def test_real_numpy_cat_dsp_and_routing():
         eng_mod.default_cat_wav_path = orig_eng_default
         rx.stop_cat_preview()
 
+    rx.recorder.q = None
+    rx._preview_port.close()
+    rx.monitor.close()
+    rx.main.close()
     cfg.close()
 
 

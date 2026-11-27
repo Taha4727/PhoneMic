@@ -321,13 +321,14 @@ widgets.apply_accent("teal", soft=False); assert not widgets.T.SOFT_COLORS and n
 
 # Full live rebuild via binder on Settings(recording tab) & Sound(eq stage) without leaking binder callbacks
 app.show_page("settings"); app.pages["settings"]._pick_tab("recording")
-base_any = len(app.binder.any_listeners)
+shell_any = sum(1 for sc, _ in app.binder.any_listeners if sc == "shell")
 app.binder.set(sm.BY_KEY["app.accent"], "blue")
 assert app.current == "settings" and app.pages["settings"].active_tab == "recording"
 assert widgets.T.ACCENT == widgets.ACCENTS["blue"][0] and "Restart" not in app.status_left.cget("text")
+after_blue_any = len(app.binder.any_listeners)
 app.binder.set(sm.BY_KEY["app.accent"], "mono")
 assert widgets.T.IS_MONO and app.pages["settings"].active_tab == "recording"
-assert len(app.binder.any_listeners) == base_any, (len(app.binder.any_listeners), base_any)
+assert len(app.binder.any_listeners) == after_blue_any == shell_any, (len(app.binder.any_listeners), after_blue_any, shell_any)
 app.show_page("sound"); app.pages["sound"].pick_stage("eq"); app.pages["sound"].eq_pick(2)
 sound_base_any = len(app.binder.any_listeners)
 app.binder.set(sm.BY_KEY["app.soft_colors"], True)
