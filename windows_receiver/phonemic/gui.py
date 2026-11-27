@@ -393,13 +393,20 @@ class App:
     def _setting_changed(self, setting):
         self.refresh_preset_marks()
 
+    @staticmethod
+    def _parse_geometry(geo):
+        m = re.fullmatch(r"(\d+)x(\d+)(?:\+|(?=-))(-?\d+)(?:\+|(?=-))(-?\d+)", geo or "")
+        if not m:
+            return None
+        return int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+
     def _restore_geometry(self):
         geo = self.cfg.data["app"]["window_geometry"]
+        parsed = self._parse_geometry(geo)
         ok = False
         w = dp(940)
-        m = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", geo or "")
-        if m:
-            w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        if parsed:
+            w, h, x, y = parsed
             vx, vy, vw, vh = screen_bounds(self.root)
             ok = (w >= dp(720) and h >= dp(480)
                   and vx - dp(50) <= x < vx + vw - dp(150)
@@ -761,10 +768,10 @@ class App:
 
             root.minsize(dp(320), dp(175))
             mg = self.cfg.data["app"].get("minimal_geometry")
+            parsed = self._parse_geometry(mg)
             ok = False
-            m = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", mg or "")
-            if m:
-                w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            if parsed:
+                w, h, x, y = parsed
                 vx, vy, vw, vh = screen_bounds(root)
                 ok = (w >= dp(280) and h >= dp(150)
                       and vx - dp(50) <= x < vx + vw - dp(100)

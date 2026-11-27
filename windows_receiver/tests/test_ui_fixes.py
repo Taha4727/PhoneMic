@@ -461,8 +461,35 @@ def test_searchbox_escape_and_pick_unfocus_and_tooltip_destroy_cleanup():
     assert tip._tip is None
 
 
+def test_restore_geometry_supports_negative_secondary_monitor_coords():
+    from phonemic import gui
+
+    assert gui.App._parse_geometry("1000x700+120+80") == (1000, 700, 120, 80)
+    assert gui.App._parse_geometry("1000x700+-900+90") == (1000, 700, -900, 90)
+    assert gui.App._parse_geometry("340x190+-900+-50") == (340, 190, -900, -50)
+    assert gui.App._parse_geometry("1000x700++100+90") is None
+    assert gui.App._parse_geometry("1000x700") is None
+
+    root = widgets.create_root()
+    root.winfo_screenwidth = lambda: 1920
+    root.winfo_screenheight = lambda: 1080
+    root.winfo_vrootx = lambda: -1920
+    root.winfo_vrooty = lambda: 0
+    root.winfo_vrootwidth = lambda: 3840
+    root.winfo_vrootheight = lambda: 1080
+    dummy = types.SimpleNamespace(
+        root=root,
+        cfg=types.SimpleNamespace(data={"app": {"window_geometry": "1000x700+-900+90"}}),
+        _parse_geometry=gui.App._parse_geometry,
+    )
+    gui.App._restore_geometry(dummy)
+    assert root._geo == "1000x700+-900+90", root._geo
+    assert dummy._init_w == 1000
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn()
             print("PASS", name)
+
